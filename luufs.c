@@ -156,13 +156,30 @@ int luufs_release(const char *path, struct fuse_file_info *fi) {
 	return close(fi->fh);
 }
 
+static int luufs_read(const char *path,
+                      char *buf,
+                      size_t size,
+                      off_t offset,
+                      struct fuse_file_info *fi) {
+	/* the return value */
+	int return_value;
+
+	/* read from the file */
+	return_value = pread(fi->fh, buf, size, offset);
+	if (-1 == return_value)
+		return -errno;
+
+	return return_value;
+}
+
 static struct fuse_operations luufs_oper = {
 	.getattr	= luufs_getattr,
 	.readdir	= luufs_readdir,
 	.open		= luufs_open,
 	.release	= luufs_release,
 	.write		= luufs_write,
-	.create 	= luufs_create
+	.create 	= luufs_create,
+	.read		= luufs_read
 };
 
 int main(int argc, char *argv[]) {
