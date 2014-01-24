@@ -172,6 +172,49 @@ static int luufs_read(const char *path,
 	return return_value;
 }
 
+static int luufs_readlink(const char *path, char *buf, size_t size) {
+	/* the link path, under a branch */
+	char branch_path[PATH_MAX];
+
+	/* a loop index */
+	int i;
+
+	/* the return value */
+	ssize_t return_value;
+
+	for (i = ARRAY_SIZE(g_branches) - 1; 0 <= i; --i) {
+		/* try to locate the link, under all branches */
+		JOIN_PATHS(branch_path, g_branches[i], path);
+		return_value = readlink((char *) &branch_path, buf, size);
+		if (0 < return_value) {
+			return_value = 0;
+			break;
+		}
+		return_value = -errno;
+		if (ENOENT != errno)
+			break;
+	}
+
+	return return_value;
+}
+
+static int luufs_symlink(const char *to, const char *from) {
+	/* the link path, under a branch */
+	char branch_path[PATH_MAX];
+
+	/* a loop index */
+	int i;
+
+	for (i = ARRAY_SIZE(g_branches) - 1; 0 <= i; --i) {
+		/* try to create the link, under all branches */
+		JOIN_PATHS(branch_path, g_branches[i], from);
+		if (0 == symlink(to, (char *) &branch_path))
+			return 0;
+	}
+
+	return -errno;
+}
+
 static struct fuse_operations luufs_oper = {
 	.getattr	= luufs_getattr,
 	.readdir	= luufs_readdir,
@@ -179,7 +222,9 @@ static struct fuse_operations luufs_oper = {
 	.release	= luufs_release,
 	.write		= luufs_write,
 	.create 	= luufs_create,
-	.read		= luufs_read
+	.read		= luufs_read,
+	.readlink	= luufs_readlink,
+	.symlink 	= luufs_symlink
 };
 
 int main(int argc, char *argv[]) {
