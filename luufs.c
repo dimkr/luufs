@@ -52,7 +52,7 @@ static int luufs_readdir(const char *path,
 	struct dirent *entry_pointer;
 
 	/* the return value */
-	int return_value;
+	int return_value = 0;
 
 	/* the directory path, under a branch */
 	char directory_path[PATH_MAX];
@@ -68,13 +68,14 @@ static int luufs_readdir(const char *path,
 		JOIN_PATHS(directory_path, g_branches[i], path);
 		directory = opendir((char *) &directory_path);
 		if (NULL == directory)
-			break;
+			continue;
 
 		/* list the branch contentes and append them to the result */
 		do {
 			return_value = readdir_r(directory, &entry, &entry_pointer);
 			if (0 != return_value) {
 				is_success = false;
+				return_value = -errno;
 				break;
 			} else {
 				if (NULL == entry_pointer)
@@ -82,6 +83,7 @@ static int luufs_readdir(const char *path,
 			}
 			if (0 != filler(buf, entry_pointer->d_name, NULL, 0)) {
 				is_success = false;
+				return_value = -ENOMEM;
 				break;
 			}
 		} while (1);
