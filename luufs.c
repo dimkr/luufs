@@ -185,8 +185,9 @@ static int luufs_readlink(const char *path, char *buf, size_t size) {
 	for (i = ARRAY_SIZE(g_branches) - 1; 0 <= i; --i) {
 		/* try to locate the link, under all branches */
 		JOIN_PATHS(branch_path, g_branches[i], path);
-		return_value = readlink((char *) &branch_path, buf, size);
+		return_value = readlink((char *) &branch_path, buf, size - 1);
 		if (0 < return_value) {
+			buf[return_value] = '\0';
 			return_value = 0;
 			break;
 		}
