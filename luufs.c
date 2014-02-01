@@ -94,6 +94,10 @@ static int luufs_open(const char *name, struct fuse_file_info *fi) {
 	fi->fh = open((char *) &path, fi->flags);
 	if (-1 != fi->fh)
 		return 0;
+	else {
+		if (ENOENT != errno)
+			goto failure;
+	}
 
 	(void) snprintf((char *) &path,
 	                sizeof(path),
@@ -104,6 +108,7 @@ static int luufs_open(const char *name, struct fuse_file_info *fi) {
 	if (-1 != fi->fh)
 		return 0;
 
+failure:
 	return -errno;
 }
 
@@ -381,7 +386,8 @@ end:
 	return is_success;
 }
 
-bool _hash_filler(fuse_fill_dir_t filler,
+bool _hash_filler(const char *parent,
+                  fuse_fill_dir_t filler,
                   void *buf,
                   crc32_t **hashes,
                   unsigned int *count,
@@ -395,6 +401,13 @@ bool _hash_filler(fuse_fill_dir_t filler,
 	/* a loop index */
 	int i;
 
+	/* the file path */
+	char path[PATH_MAX];
+
+	/* the file attributes */
+	struct stat attributes;
+	struct stat *attributes_pointer;
+
 	/* hash the file name */
 	hash = _hash(name);
 
@@ -404,12 +417,22 @@ bool _hash_filler(fuse_fill_dir_t filler,
 			goto success;
 	}
 
+	/* get the file attributes */
+	if (NULL == parent)
+		attributes_pointer = NULL;
+	else {
+		(void) snprintf((char *) &path, sizeof(path), "%s/%s", parent, name);
+		if (-1 == lstat((char *) &path, &attributes))
+			goto end;
+		attributes_pointer = &attributes;
+	}
+
 	/* add the hash to the array */
 	if (false == _add_hash(hashes, count, hash))
 		goto end;
 
 	/* add the file to the result */
-	if (0 != filler(buf, name, NULL, 0))
+	if (0 != filler(buf, name, attributes_pointer, 0))
 		goto end;
 
 success:
@@ -420,7 +443,8 @@ end:
 	return is_success;
 }
 
-int _readdir_single(DIR *directory,
+int _readdir_single(const char *directory_path,
+                    DIR *directory,
                     crc32_t **hashes,
                     unsigned int *hashes_count,
                     fuse_fill_dir_t filler,
@@ -440,7 +464,8 @@ int _readdir_single(DIR *directory,
 			if (NULL == entry_pointer)
 				break;
 		}
-		if (false == _hash_filler(filler,
+		if (false == _hash_filler(directory_path,
+		                          filler,
 		                          buf,
 		                          hashes,
 		                          hashes_count,
@@ -469,17 +494,26 @@ static int luufs_readdir(const char *path,
 	crc32_t *hashes = NULL;
 	unsigned int hashes_count = 0;
 
+	/* the underlying directory path */
+	char real_path[PATH_MAX];
+
 	/* add relative paths */
-	if (false == _hash_filler(filler, buf, &hashes, &hashes_count, "."))
+	if (false == _hash_filler(NULL, filler, buf, &hashes, &hashes_count, "."))
 		goto free_hashes;
-	if (false == _hash_filler(filler, buf, &hashes, &hashes_count, ".."))
+	if (false == _hash_filler(NULL, filler, buf, &hashes, &hashes_count, ".."))
 		goto free_hashes;
 
 	return_value = 0;
 
 	/* list the files under the read-only directory */
 	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->read_only) {
+		(void) snprintf((char *) &real_path,
+		                sizeof(real_path),
+		                "%s/%s",
+		                CONFIG_READ_ONLY_DIRECTORY,
+		                path);
 		return_value = _readdir_single(
+		                         (char *) &real_path,
 		                         ((_dir_pair_t *) (intptr_t) fi->fh)->read_only,
 		                         &hashes,
 		                         &hashes_count,
@@ -491,7 +525,13 @@ static int luufs_readdir(const char *path,
 
 	/* list the files under the writeable directory */
 	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->writeable) {
+		(void) snprintf((char *) &real_path,
+		                sizeof(real_path),
+		                "%s/%s",
+		                CONFIG_WRITEABLE_DIRECTORY,
+		                path);
 		return_value = _readdir_single(
+		                         (char *) &real_path,
 		                         ((_dir_pair_t *) (intptr_t) fi->fh)->writeable,
 		                         &hashes,
 		                         &hashes_count,
