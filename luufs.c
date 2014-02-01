@@ -471,9 +471,9 @@ static int luufs_readdir(const char *path,
 
 	/* add relative paths */
 	if (false == _hash_filler(filler, buf, &hashes, &hashes_count, "."))
-		goto end;
+		goto free_hashes;
 	if (false == _hash_filler(filler, buf, &hashes, &hashes_count, ".."))
-		goto end;
+		goto free_hashes;
 
 	return_value = 0;
 
@@ -486,7 +486,7 @@ static int luufs_readdir(const char *path,
 		                         filler,
 		                         buf);
 		if (0 != return_value)
-			goto end;
+			goto free_hashes;
 	}
 
 	/* list the files under the writeable directory */
@@ -498,10 +498,14 @@ static int luufs_readdir(const char *path,
 		                         filler,
 		                         buf);
 		if (0 != return_value)
-			goto end;
+			goto free_hashes;
 	}
 
-end:
+free_hashes:
+	/* free the hashes list */
+	if (NULL != hashes)
+		free(hashes);
+
 	return return_value;
 }
 
