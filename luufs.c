@@ -16,8 +16,13 @@
 #include "config.h"
 
 typedef struct {
-	DIR *read_only;
-	DIR *writeable;
+	DIR *handle;
+	char path[PATH_MAX];
+} _dir_t;
+
+typedef struct {
+	_dir_t ro;
+	_dir_t rw;
 } _dir_pair_t;
 
 static int luufs_stat(const char *name, struct stat *stbuf);
@@ -309,34 +314,33 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi) {
 	/* the return value */
 	int return_value = -ENOMEM;
 
-	/* the directory path */
-	char path[PATH_MAX];
-
 	/* allocate memory for the directory pair */
 	fi->fh = (uint64_t) (intptr_t) malloc(sizeof(_dir_pair_t));
 	if (NULL == (void *) (intptr_t) fi->fh)
 		goto end;
 
 	/* open the writeable directory */
-	(void) snprintf((char *) &path,
-	                sizeof(path),
+	(void) snprintf((char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->rw.path),
+	                sizeof(((_dir_t *) NULL)->path),
 	                "%s/%s",
 	                CONFIG_WRITEABLE_DIRECTORY,
 	                name);
-	((_dir_pair_t *) (intptr_t) fi->fh)->writeable = opendir((char *) &path);
-	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->writeable)
+	((_dir_pair_t *) (intptr_t) fi->fh)->rw.handle = opendir(
+	                  (char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->rw.path));
+	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->rw.handle)
 		return_value = 0;
 	else
 		return_value = -errno;
 
 	/* open the read-only directory */
-	(void) snprintf((char *) &path,
-	                sizeof(path),
+	(void) snprintf((char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->ro.path),
+	                sizeof(((_dir_t *) NULL)->path),
 	                "%s/%s",
 	                CONFIG_READ_ONLY_DIRECTORY,
 	                name);
-	((_dir_pair_t *) (intptr_t) fi->fh)->read_only = opendir((char *) &path);
-	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->read_only)
+	((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle = opendir(
+	                  (char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->ro.path));
+	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle)
 		return_value = 0;
 
 end:
@@ -345,21 +349,17 @@ end:
 
 static int luufs_closedir(const char *name, struct fuse_file_info *fi) {
 	/* close the read-only directory */
-	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->read_only)
-		(void) closedir(((_dir_pair_t *) (intptr_t) fi->fh)->read_only);
+	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle)
+		(void) closedir(((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle);
 
 	/* close the writeable directory */
-	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->writeable)
-		(void) closedir(((_dir_pair_t *) (intptr_t) fi->fh)->writeable);
+	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->rw.handle)
+		(void) closedir(((_dir_pair_t *) (intptr_t) fi->fh)->rw.handle);
 
 	/* free the allocated structure */
 	free((void *) (intptr_t) fi->fh);
 
 	return 0;
-}
-
-crc32_t _hash(const char *name) {
-	return crc32_hash((const unsigned char *) name, strlen(name));
 }
 
 bool _add_hash(crc32_t **hashes, unsigned int *count, const crc32_t hash) {
@@ -409,7 +409,7 @@ bool _hash_filler(const char *parent,
 	struct stat *attributes_pointer;
 
 	/* hash the file name */
-	hash = _hash(name);
+	hash = crc32_hash((const unsigned char *) name, strnlen(name, NAME_MAX));
 
 	/* if the file was already listed, skip it */
 	for (i = 0; (*count) > i; ++i) {
@@ -443,8 +443,7 @@ end:
 	return is_success;
 }
 
-int _readdir_single(const char *directory_path,
-                    DIR *directory,
+int _readdir_single(_dir_t *directory,
                     crc32_t **hashes,
                     unsigned int *hashes_count,
                     fuse_fill_dir_t filler,
@@ -456,15 +455,19 @@ int _readdir_single(const char *directory_path,
 	struct dirent entry;
 	struct dirent *entry_pointer;
 
+	/* upon failure to open the directory, report success */
+	if (NULL == directory->handle)
+		goto success;
+
 	do {
-		if (0 != readdir_r(directory, &entry, &entry_pointer)) {
+		if (0 != readdir_r(directory->handle, &entry, &entry_pointer)) {
 			return_value = -errno;
 			goto end;
 		} else {
 			if (NULL == entry_pointer)
 				break;
 		}
-		if (false == _hash_filler(directory_path,
+		if (false == _hash_filler((char *) &directory->path,
 		                          filler,
 		                          buf,
 		                          hashes,
@@ -475,6 +478,7 @@ int _readdir_single(const char *directory_path,
 		}
 	} while (1);
 
+success:
 	/* report success */
 	return_value = 0;
 
@@ -488,58 +492,27 @@ static int luufs_readdir(const char *path,
                          off_t offset,
                          struct fuse_file_info *fi) {
 	/* the return value */
-	int return_value = -ENOMEM;
+	int return_value;
 
 	/* file name hashes */
 	crc32_t *hashes = NULL;
 	unsigned int hashes_count = 0;
 
-	/* the underlying directory path */
-	char real_path[PATH_MAX];
-
-	/* add relative paths */
-	if (false == _hash_filler(NULL, filler, buf, &hashes, &hashes_count, "."))
+	/* list the files under the writeable directory */
+	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->rw),
+	                               &hashes,
+	                               &hashes_count,
+	                               filler,
+	                               buf);
+	if (0 != return_value)
 		goto free_hashes;
-	if (false == _hash_filler(NULL, filler, buf, &hashes, &hashes_count, ".."))
-		goto free_hashes;
-
-	return_value = 0;
 
 	/* list the files under the read-only directory */
-	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->read_only) {
-		(void) snprintf((char *) &real_path,
-		                sizeof(real_path),
-		                "%s/%s",
-		                CONFIG_READ_ONLY_DIRECTORY,
-		                path);
-		return_value = _readdir_single(
-		                         (char *) &real_path,
-		                         ((_dir_pair_t *) (intptr_t) fi->fh)->read_only,
-		                         &hashes,
-		                         &hashes_count,
-		                         filler,
-		                         buf);
-		if (0 != return_value)
-			goto free_hashes;
-	}
-
-	/* list the files under the writeable directory */
-	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->writeable) {
-		(void) snprintf((char *) &real_path,
-		                sizeof(real_path),
-		                "%s/%s",
-		                CONFIG_WRITEABLE_DIRECTORY,
-		                path);
-		return_value = _readdir_single(
-		                         (char *) &real_path,
-		                         ((_dir_pair_t *) (intptr_t) fi->fh)->writeable,
-		                         &hashes,
-		                         &hashes_count,
-		                         filler,
-		                         buf);
-		if (0 != return_value)
-			goto free_hashes;
-	}
+	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->ro),
+	                               &hashes,
+	                               &hashes_count,
+	                               filler,
+	                               buf);
 
 free_hashes:
 	/* free the hashes list */
