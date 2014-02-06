@@ -193,7 +193,7 @@ static int luufs_read(const char *path,
 	if (-1 == return_value)
 		return -errno;
 
-	return return_value;
+	return (int) return_value;
 }
 
 static int luufs_write(const char *path,
@@ -212,7 +212,7 @@ static int luufs_write(const char *path,
 
 static int luufs_mkdir(const char *name, mode_t mode) {
 	/* the return value */
-	int return_value;
+	int return_value = -EEXIST;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -221,10 +221,8 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 	struct stat attributes;
 
 	/* make sure the directory does not exist */
-	if (-ENOENT != luufs_stat(name, &attributes)) {
-		return_value = -EEXIST;
+	if (-ENOENT != luufs_stat(name, &attributes))
 		goto end;
-	}
 
 	/* create the directory, under the writeable directory */
 	(void) snprintf((char *) &path,
@@ -233,8 +231,9 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 	                CONFIG_WRITEABLE_DIRECTORY,
 	                name);
 	if (0 == mkdir((char *) &path, mode))
-		return 0;
-	return_value = -errno;
+		return_value = 0;
+	else
+		return_value = -errno;
 
 end:
 	return return_value;
@@ -348,6 +347,13 @@ end:
 }
 
 static int luufs_closedir(const char *name, struct fuse_file_info *fi) {
+	/* the return value */
+	int return_value = -EBADF;
+
+	/* make sure the directory was opened */
+	if (NULL == (void *) (intptr_t) fi->fh)
+		goto end;
+
 	/* close the read-only directory */
 	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle)
 		(void) closedir(((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle);
@@ -359,7 +365,11 @@ static int luufs_closedir(const char *name, struct fuse_file_info *fi) {
 	/* free the allocated structure */
 	free((void *) (intptr_t) fi->fh);
 
-	return 0;
+	/* report success */
+	return_value = 0;
+
+end:
+	return return_value;
 }
 
 bool _add_hash(crc32_t **hashes, unsigned int *count, const crc32_t hash) {
@@ -492,11 +502,18 @@ static int luufs_readdir(const char *path,
                          off_t offset,
                          struct fuse_file_info *fi) {
 	/* the return value */
-	int return_value;
+	int return_value = -EBADF;
 
 	/* file name hashes */
-	crc32_t *hashes = NULL;
-	unsigned int hashes_count = 0;
+	crc32_t *hashes;
+	unsigned int hashes_count;
+
+	/* make sure the directory was opened */
+	if (NULL == (void *) (intptr_t) fi->fh)
+		goto end;
+
+	hashes = NULL;
+	hashes_count = 0;
 
 	/* list the files under the writeable directory */
 	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->rw),
@@ -519,6 +536,7 @@ free_hashes:
 	if (NULL != hashes)
 		free(hashes);
 
+end:
 	return return_value;
 }
 
