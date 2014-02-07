@@ -65,6 +65,19 @@ bool tree_create(const char *path) {
 	} while (1);
 
 	for (i = (directories_count - 1); 0 <= i; --i) {
+		/* if a writeable directory exists, do nothing */
+		(void) snprintf((char *) &writeable_directory,
+		                sizeof(writeable_directory),
+		                "%s/%s",
+		                CONFIG_WRITEABLE_DIRECTORY,
+		                directories[i]);
+		if (0 == lstat((char *) &writeable_directory, &attributes))
+			continue;
+		else {
+			if (ENOENT != errno)
+				goto free_directories;
+		}
+
 		/* obtain the read-only directory permissions */
 		(void) snprintf((char *) &read_only_directory,
 		                sizeof(read_only_directory),
@@ -75,15 +88,8 @@ bool tree_create(const char *path) {
 			goto free_directories;
 
 		/* create a writeable directory */
-		(void) snprintf((char *) &writeable_directory,
-		                sizeof(writeable_directory),
-		                "%s/%s",
-		                CONFIG_WRITEABLE_DIRECTORY,
-		                directories[i]);
-		if (-1 == mkdir((char *) &writeable_directory, attributes.st_mode)) {
-			if (EEXIST != errno)
-				goto free_directories;
-		}
+		if (-1 == mkdir((char *) &writeable_directory, attributes.st_mode))
+			goto free_directories;
 	}
 
 	/* report success */

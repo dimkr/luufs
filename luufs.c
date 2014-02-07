@@ -225,15 +225,22 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 		goto end;
 
 	/* create the directory, under the writeable directory */
+	if (false == tree_create(name)) {
+		return_value = -errno;
+		goto end;
+	}
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
 	                CONFIG_WRITEABLE_DIRECTORY,
 	                name);
-	if (0 == mkdir((char *) &path, mode))
-		return_value = 0;
-	else
+	if (-1 == mkdir((char *) &path, mode)) {
 		return_value = -errno;
+		goto end;
+	}
+
+	/* report success */
+	return_value = 0;
 
 end:
 	return return_value;
@@ -364,6 +371,7 @@ static int luufs_closedir(const char *name, struct fuse_file_info *fi) {
 
 	/* free the allocated structure */
 	free((void *) (intptr_t) fi->fh);
+	fi->fh = (uint64_t) (intptr_t) NULL;
 
 	/* report success */
 	return_value = 0;
