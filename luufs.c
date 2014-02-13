@@ -615,6 +615,111 @@ failure:
 	return -errno;
 }
 
+static int luufs_utimens(const char *name, const struct timespec tv[2]) {
+	/* the return value */
+	int return_value;
+
+	/* the file path */
+	char path[PATH_MAX];
+
+	/* the file attributes */
+	struct stat attributes;
+
+	/* make sure the file exists */
+	return_value = luufs_stat(name, &attributes);
+	if (-ENOENT == return_value)
+		goto end;
+
+	/* try to change the file modification time, in the writeable directory */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                name);
+	if (0 == utimensat(0, (char *) &path, tv, AT_SYMLINK_NOFOLLOW))
+		return 0;
+
+	/* if the file exists only under the read-only directory, return EACCESS
+	 * upon failure to change its modification time */
+	if (ENOENT == errno)
+		return_value = -EACCES;
+	else
+		return_value = -errno;
+
+end:
+	return return_value;
+}
+
+static int luufs_chmod(const char *name, mode_t mode) {
+	/* the return value */
+	int return_value;
+
+	/* the file path */
+	char path[PATH_MAX];
+
+	/* the file attributes */
+	struct stat attributes;
+
+	/* make sure the file exists */
+	return_value = luufs_stat(name, &attributes);
+	if (-ENOENT == return_value)
+		goto end;
+
+	/* try to change the file permissions, in the writeable directory */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                name);
+	if (0 == chmod((char *) &path, mode))
+		return 0;
+
+	/* if the file exists only under the read-only directory, return EACCESS
+	 * upon failure to change its permissions */
+	if (ENOENT == errno)
+		return_value = -EACCES;
+	else
+		return_value = -errno;
+
+end:
+	return return_value;
+}
+
+static int luufs_chown(const char *name, uid_t uid, gid_t gid) {
+	/* the return value */
+	int return_value;
+
+	/* the file path */
+	char path[PATH_MAX];
+
+	/* the file attributes */
+	struct stat attributes;
+
+	/* make sure the file exists */
+	return_value = luufs_stat(name, &attributes);
+	if (-ENOENT == return_value)
+		goto end;
+
+	/* try to change the file owner, in the writeable directory */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                name);
+	if (0 == chown((char *) &path, uid, gid))
+		return 0;
+
+	/* if the file exists only under the read-only directory, return EACCESS
+	 * upon failure to change its owner */
+	if (ENOENT == errno)
+		return_value = -EACCES;
+	else
+		return_value = -errno;
+
+end:
+	return return_value;
+}
+
 static struct fuse_operations luufs_oper = {
 	.init		= luufs_init,
 	.destroy	= luufs_destroy,
@@ -638,7 +743,12 @@ static struct fuse_operations luufs_oper = {
 	.releasedir	= luufs_closedir,
 
 	.symlink	= luufs_symlink,
-	.readlink	= luufs_readlink
+	.readlink	= luufs_readlink,
+
+	.utimens	= luufs_utimens,
+
+	.chmod		= luufs_chmod,
+	.chown		= luufs_chown
 };
 
 int main(int argc, char *argv[]) {
