@@ -28,6 +28,7 @@ typedef struct {
 static int luufs_stat(const char *name, struct stat *stbuf);
 
 static void *luufs_init(struct fuse_conn_info *conn) {
+	(void) tree_create("/");
 	return NULL;
 }
 
@@ -48,10 +49,6 @@ static int luufs_create(const char *name,
 		errno = EEXIST;
 		goto failure;
 	}
-
-	/* create the file's parent directory, under the writeable directory */
-	if (false == tree_create(name))
-		goto failure;
 
 	/* create the file, under the writeable directory */
 	(void) snprintf((char *) &path,
@@ -225,10 +222,6 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 		goto end;
 
 	/* create the directory, under the writeable directory */
-	if (false == tree_create(name)) {
-		return_value = -errno;
-		goto end;
-	}
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",

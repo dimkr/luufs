@@ -1,110 +1,90 @@
-#include <string.h>
-#include <libgen.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <unistd.h>
 #include <limits.h>
+#include <dirent.h>
 #include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
 #include "tree.h"
 #include "config.h"
 
-bool tree_create(const char *path) {
+bool tree_create(const char *name) {
 	/* the return value */
 	bool is_success = false;
 
-	/* a copy of the passed path */
-	char *path_copy;
+	/* the directory path */
+	char path[PATH_MAX];
 
-	/* directories to create */
-	char *directory;
-	char **directories;
-	char **more_directories;
-	unsigned int directories_count;
-	int i;
+	/* the directory */
+	DIR *directory;
 
-	/* a read-only directory path */
-	char read_only_directory[PATH_MAX];
-
-	/* the read-only directory attributes */
+	/* the directory attributes */
 	struct stat attributes;
 
-	/* a writeable directory path */
-	char writeable_directory[PATH_MAX];
+	/* a file under the directory */
+	struct dirent _entry;
+	struct dirent *entry;
 
-	/* copy the path, so it can be modified */
-	path_copy = strdup(path);
-	if (NULL == path_copy)
+	/* a sub-directory path */
+	char sub_directory[PATH_MAX];
+
+	/* get the directory attributes */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_READ_ONLY_DIRECTORY,
+	                name);
+	if (-1 == stat((char *) &path, &attributes))
 		goto end;
 
-	directories_count = 0;
-	directories = NULL;
-	do {
-		/* separate the parent directory path */
-		directory = dirname(path_copy);
+	/* open the directory */
+	directory = opendir(path);
+	if (NULL == directory)
+		goto end;
 
-		/* break the loop once the file system root was reached */
-		if (0 == strcmp("/", directory))
+	/* create the directory, under the writeable branch */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                name);
+	if (-1 == mkdir((char *) &path, attributes.st_mode)) {
+		if (EEXIST != errno)
+			goto close_directory;
+	}
+
+	do {
+		/* read the details of a file under the directory */
+		if (0 != readdir_r(directory, &_entry, &entry))
+			goto close_directory;
+		if (NULL == entry)
 			break;
 
-		/* duplicate the parent directory path */
-		directory = strdup(directory);
-		if (NULL == directory)
-			goto free_directories;
-
-		/* enlarge the directories array by one element */
-		++directories_count;
-		more_directories = realloc(directories,
-		                           (sizeof(char *) * directories_count));
-		if (NULL == more_directories)
-			goto free_directories;
-		directories = more_directories;
-
-		/* append the directory to the array */
-		directories[directories_count - 1] = directory;
-	} while (1);
-
-	for (i = (directories_count - 1); 0 <= i; --i) {
-		/* if a writeable directory exists, do nothing */
-		(void) snprintf((char *) &writeable_directory,
-		                sizeof(writeable_directory),
-		                "%s/%s",
-		                CONFIG_WRITEABLE_DIRECTORY,
-		                directories[i]);
-		if (0 == lstat((char *) &writeable_directory, &attributes))
+		/* skip non-directory entries */
+		if (DT_DIR != entry->d_type)
 			continue;
-		else {
-			if (ENOENT != errno)
-				goto free_directories;
-		}
 
-		/* obtain the read-only directory permissions */
-		(void) snprintf((char *) &read_only_directory,
-		                sizeof(read_only_directory),
+		/* skip relative paths */
+		if ((0 == strcmp(".", (char *) &entry->d_name)) ||
+		    (0 == strcmp("..", (char *) &entry->d_name)))
+			continue;
+
+		/* recurse into sub-directories */
+		(void) snprintf((char *) &sub_directory,
+		                sizeof(sub_directory),
 		                "%s/%s",
-		                CONFIG_READ_ONLY_DIRECTORY,
-		                directories[i]);
-		if (-1 == lstat((char *) &read_only_directory, &attributes))
-			goto free_directories;
-
-		/* create a writeable directory */
-		if (-1 == mkdir((char *) &writeable_directory, attributes.st_mode))
-			goto free_directories;
-	}
+		                name,
+		                (char *) &entry->d_name);
+		if (false == mirror_directory((char *) &sub_directory))
+			goto close_directory;
+	} while (1);
 
 	/* report success */
 	is_success = true;
 
-free_directories:
-	/* free the list of parent directories */
-	if (NULL != directories) {
-		for (i = (directories_count - 1); 0 <= i; --i)
-			free(directories[i]);
-		free(directories);
-	}
-
-	/* free the copied path */
-	free(path_copy);
+close_directory:
+	/* close the directory */
+	(void) closedir(directory);
 
 end:
 	return is_success;
