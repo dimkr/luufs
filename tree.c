@@ -1,5 +1,6 @@
 #include <limits.h>
 #include <dirent.h>
+#include <string.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -75,7 +76,7 @@ bool tree_create(const char *name) {
 		                "%s/%s",
 		                name,
 		                (char *) &entry->d_name);
-		if (false == mirror_directory((char *) &sub_directory))
+		if (false == tree_create((char *) &sub_directory))
 			goto close_directory;
 	} while (1);
 
