@@ -713,6 +713,49 @@ end:
 	return return_value;
 }
 
+static int luufs_rename(const char *oldpath, const char *newpath) {
+	/* the return value */
+	int return_value;
+
+	/* the original path */
+	char original_path[PATH_MAX];
+
+	/* the new file path */
+	char new_path[PATH_MAX];
+
+	/* the file attributes */
+	struct stat attributes;
+
+	/* make sure the file exists */
+	return_value = luufs_stat(oldpath, &attributes);
+	if (-ENOENT == return_value)
+		goto end;
+
+	/* try to move the file, in the writeable directory */
+	(void) snprintf((char *) &original_path,
+	                sizeof(original_path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                oldpath);
+	(void) snprintf((char *) &new_path,
+	                sizeof(new_path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                newpath);
+	if (0 == rename((char *) &original_path, (char *) &new_path))
+		return 0;
+
+	/* if the file exists only under the read-only directory, return EACCESS
+	 * upon failure to move it */
+	if (ENOENT == errno)
+		return_value = -EACCES;
+	else
+		return_value = -errno;
+
+end:
+	return return_value;
+}
+
 static struct fuse_operations luufs_oper = {
 	.init		= luufs_init,
 	.destroy	= luufs_destroy,
@@ -741,7 +784,9 @@ static struct fuse_operations luufs_oper = {
 	.utimens	= luufs_utimens,
 
 	.chmod		= luufs_chmod,
-	.chown		= luufs_chown
+	.chown		= luufs_chown,
+
+	.rename		= luufs_rename
 };
 
 int main(int argc, char *argv[]) {
