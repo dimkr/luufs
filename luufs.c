@@ -249,10 +249,22 @@ static int luufs_rmdir(const char *name) {
 	/* the directory attributes */
 	struct stat attributes;
 
-	/* make sure the directory exists */
-	return_value = luufs_stat(name, &attributes);
-	if (-ENOENT == return_value)
+	/* if the directory exists under the read-only directory, report failure
+	 * immediately */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_READ_ONLY_DIRECTORY,
+	                name);
+	if (0 == stat((char *) &path, &attributes)) {
+		return_value = -EPERM;
 		goto end;
+	} else {
+		if (ENOENT != errno) {
+			errno = -ENOMEM;
+			goto end;
+		}
+	}
 
 	/* try to remove the directory from the writeable directory */
 	(void) snprintf((char *) &path,
@@ -260,14 +272,8 @@ static int luufs_rmdir(const char *name) {
 	                "%s/%s",
 	                CONFIG_WRITEABLE_DIRECTORY,
 	                name);
-	if (0 == rmdir((char *) &path))
-		return 0;
-
-	/* if the directory exists only under the read-only directory, return
-	 * EACCESS upon failure to delete it */
-	if (ENOENT == errno)
-		return_value = -EACCES;
-	else
+	return_value = rmdir((char *) &path);
+	if (-1 == return_value)
 		return_value = -errno;
 
 end:
