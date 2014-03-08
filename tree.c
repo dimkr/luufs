@@ -26,9 +26,6 @@ bool tree_create(const char *name) {
 	struct dirent _entry;
 	struct dirent *entry;
 
-	/* a sub-directory path */
-	char sub_directory[PATH_MAX];
-
 	/* get the directory attributes */
 	(void) snprintf((char *) &path,
 	                sizeof(path),
@@ -71,12 +68,12 @@ bool tree_create(const char *name) {
 			continue;
 
 		/* recurse into sub-directories */
-		(void) snprintf((char *) &sub_directory,
-		                sizeof(sub_directory),
+		(void) snprintf((char *) &path,
+		                sizeof(path),
 		                "%s/%s",
 		                name,
 		                (char *) &entry->d_name);
-		if (false == tree_create((char *) &sub_directory))
+		if (false == tree_create((char *) &path))
 			goto close_directory;
 	} while (1);
 
