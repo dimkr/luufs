@@ -762,6 +762,37 @@ end:
 	return return_value;
 }
 
+static int luufs_mknod(const char *name, mode_t mode, dev_t dev) {
+	/* the return value */
+	int return_value;
+
+	/* the device node path */
+	char path[PATH_MAX];
+
+	/* the device node attributes */
+	struct stat attributes;
+
+	/* make sure the device node does not exist */
+	if (-ENOENT != luufs_stat(name, &attributes)) {
+		return_value = -EEXIST;
+		goto end;
+	}
+
+	/* try to create the device node, in the writeable directory */
+	(void) snprintf((char *) &path,
+	                sizeof(path),
+	                "%s/%s",
+	                CONFIG_WRITEABLE_DIRECTORY,
+	                name);
+	if (0 == mknod((char *) &path, mode, dev))
+		return_value = 0;
+	else
+		return_value = -errno;
+
+end:
+	return return_value;
+}
+
 static struct fuse_operations luufs_oper = {
 	.init		= luufs_init,
 	.destroy	= luufs_destroy,
@@ -792,7 +823,8 @@ static struct fuse_operations luufs_oper = {
 	.chmod		= luufs_chmod,
 	.chown		= luufs_chown,
 
-	.rename		= luufs_rename
+	.rename		= luufs_rename,
+	.mknod		= luufs_mknod
 };
 
 int main(int argc, char *argv[]) {
