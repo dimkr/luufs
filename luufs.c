@@ -449,7 +449,7 @@ bool _hash_filler(const char *parent,
 		goto end;
 
 	/* add the file to the result */
-	if (0 != filler(buf, name, attributes_pointer, 0))
+	if (0 != filler(buf, name, attributes_pointer, 1))
 		goto end;
 
 success:
@@ -461,6 +461,7 @@ end:
 }
 
 int _readdir_single(_dir_t *directory,
+                    const off_t offset,
                     crc32_t **hashes,
                     unsigned int *hashes_count,
                     fuse_fill_dir_t filler,
@@ -475,6 +476,10 @@ int _readdir_single(_dir_t *directory,
 	/* upon failure to open the directory, report success */
 	if (NULL == directory->handle)
 		goto success;
+
+	/* if rewinddir() was called, update the contents */
+	if (0 == offset)
+		rewinddir(directory->handle);
 
 	do {
 		if (0 != readdir_r(directory->handle, &entry, &entry_pointer)) {
@@ -524,6 +529,7 @@ static int luufs_readdir(const char *path,
 
 	/* list the files under the writeable directory */
 	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->rw),
+	                               offset,
 	                               &hashes,
 	                               &hashes_count,
 	                               filler,
@@ -533,6 +539,7 @@ static int luufs_readdir(const char *path,
 
 	/* list the files under the read-only directory */
 	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->ro),
+	                               offset,
 	                               &hashes,
 	                               &hashes_count,
 	                               filler,
