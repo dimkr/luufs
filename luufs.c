@@ -21,8 +21,16 @@ typedef struct {
 } _dir_t;
 
 typedef struct {
+	char name[1 + NAME_MAX];
+	struct stat attributes;
+	crc32_t hash;
+} _entry_t;
+
+typedef struct {
 	_dir_t ro;
 	_dir_t rw;
+	_entry_t *entries;
+	unsigned int entries_count;
 } _dir_pair_t;
 
 static int luufs_stat(const char *name, struct stat *stbuf);
@@ -348,6 +356,10 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi) {
 	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle)
 		return_value = 0;
 
+	/* initialize the list of files under the directory */
+	((_dir_pair_t *) (intptr_t) fi->fh)->entries = NULL;
+	((_dir_pair_t *) (intptr_t) fi->fh)->entries_count = 0;
+
 end:
 	return return_value;
 }
@@ -359,6 +371,10 @@ static int luufs_closedir(const char *name, struct fuse_file_info *fi) {
 	/* make sure the directory was opened */
 	if (NULL == (void *) (intptr_t) fi->fh)
 		goto end;
+
+	/* free the list of files */
+	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->entries)
+		free(((_dir_pair_t *) (intptr_t) fi->fh)->entries);
 
 	/* close the read-only directory */
 	if (NULL != ((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle)
@@ -379,93 +395,9 @@ end:
 	return return_value;
 }
 
-bool _add_hash(crc32_t **hashes, unsigned int *count, const crc32_t hash) {
-	/* the return value */
-	bool is_success = false;
-
-	/* the enlarged hashes array */
-	crc32_t *more_hashes;
-
-	/* enlarge the hashes array */
-	++(*count);
-	more_hashes = realloc(*hashes, (sizeof(crc32_t) * (*count)));
-	if (NULL == more_hashes)
-		goto end;
-	*hashes = more_hashes;
-
-	/* append the hash to the array */
-	(*hashes)[(*count) - 1] = hash;
-
-	/* report success */
-	is_success = true;
-
-end:
-	return is_success;
-}
-
-bool _hash_filler(const char *parent,
-                  fuse_fill_dir_t filler,
-                  void *buf,
-                  crc32_t **hashes,
-                  unsigned int *count,
-                  const char *name) {
-	/* the return value */
-	bool is_success = false;
-
-	/* the file name hash */
-	crc32_t hash;
-
-	/* a loop index */
-	int i;
-
-	/* the file path */
-	char path[PATH_MAX];
-
-	/* the file attributes */
-	struct stat attributes;
-	struct stat *attributes_pointer;
-
-	/* hash the file name */
-	hash = crc32_hash((const unsigned char *) name, strnlen(name, NAME_MAX));
-
-	/* if the file was already listed, skip it */
-	for (i = 0; (*count) > i; ++i) {
-		if ((*hashes)[i] == hash)
-			goto success;
-	}
-
-	/* get the file attributes */
-	if (NULL == parent)
-		attributes_pointer = NULL;
-	else {
-		(void) snprintf((char *) &path, sizeof(path), "%s/%s", parent, name);
-		if (-1 == lstat((char *) &path, &attributes))
-			goto end;
-		attributes_pointer = &attributes;
-	}
-
-	/* add the hash to the array */
-	if (false == _add_hash(hashes, count, hash))
-		goto end;
-
-	/* add the file to the result */
-	if (0 != filler(buf, name, attributes_pointer, 1))
-		goto end;
-
-success:
-	/* report success */
-	is_success = true;
-
-end:
-	return is_success;
-}
-
-int _readdir_single(_dir_t *directory,
-                    const off_t offset,
-                    crc32_t **hashes,
-                    unsigned int *hashes_count,
-                    fuse_fill_dir_t filler,
-                    void *buf) {
+int _read_directory(_dir_t *directory,
+                    _entry_t **entries,
+                    unsigned int *entries_count) {
 	/* the return value */
 	int return_value;
 
@@ -473,15 +405,28 @@ int _readdir_single(_dir_t *directory,
 	struct dirent entry;
 	struct dirent *entry_pointer;
 
+	/* the file attributes */
+	struct stat attributes;
+
+	/* the file name hash */
+	crc32_t hash;
+
+	/* the file path */
+	char path[PATH_MAX];
+
+	/* the enlarged entries array */
+	_entry_t *more_entries;
+
+	/* a loop index */
+	unsigned int i;
+
 	/* upon failure to open the directory, report success */
 	if (NULL == directory->handle)
 		goto success;
 
-	/* if rewinddir() was called, update the contents */
-	if (0 == offset)
-		rewinddir(directory->handle);
-
 	do {
+next:
+		/* read the name of one file under the directory */
 		if (0 != readdir_r(directory->handle, &entry, &entry_pointer)) {
 			return_value = -errno;
 			goto end;
@@ -489,15 +434,39 @@ int _readdir_single(_dir_t *directory,
 			if (NULL == entry_pointer)
 				break;
 		}
-		if (false == _hash_filler((char *) &directory->path,
-		                          filler,
-		                          buf,
-		                          hashes,
-		                          hashes_count,
-		                          entry_pointer->d_name)) {
+
+		/* hash the file name */
+		hash = crc32_hash((const unsigned char *) &entry_pointer->d_name,
+		                  strnlen((char *) &entry_pointer->d_name, NAME_MAX));
+
+		/* if there's another file with the same hash, continue to the next one */
+		for (i = 0; *entries_count > i; ++i) {
+			if (hash == (*entries)[i].hash)
+				goto next;
+		}
+
+		/* get the file attributes */
+		(void) snprintf((char *) &path,
+		                sizeof(path),
+		                "%s/%s",
+		                (char *) &directory->path,
+		                (char *) &entry_pointer->d_name);
+		if (-1 == lstat((char *) &path, &attributes))
+			continue;
+
+		/* enlarge the entries array */
+		more_entries = realloc(*entries, sizeof(_entry_t) * (1 + *entries_count));
+		if (NULL == more_entries) {
 			return_value = -ENOMEM;
 			goto end;
 		}
+
+		/* add the file to the array */
+		*entries = more_entries;
+		(*entries)[*entries_count].hash = hash;
+		(void) strcpy((char *) &(*entries)[*entries_count].name, (char *) &entry_pointer->d_name);
+		(void) memcpy(&(*entries)[*entries_count].attributes, &attributes, sizeof(attributes));
+		++(*entries_count);
 	} while (1);
 
 success:
@@ -516,39 +485,57 @@ static int luufs_readdir(const char *path,
 	/* the return value */
 	int return_value = -EBADF;
 
-	/* file name hashes */
-	crc32_t *hashes;
-	unsigned int hashes_count;
+	_dir_pair_t *pair;
 
 	/* make sure the directory was opened */
 	if (NULL == (void *) (intptr_t) fi->fh)
 		goto end;
 
-	hashes = NULL;
-	hashes_count = 0;
+	pair = (_dir_pair_t *) (intptr_t) fi->fh;
+	if (0 == offset) {
+		/* return to the first file under each directory */
+		rewinddir(pair->rw.handle);
+		rewinddir(pair->ro.handle);
 
-	/* list the files under the writeable directory */
-	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->rw),
-	                               offset,
-	                               &hashes,
-	                               &hashes_count,
-	                               filler,
-	                               buf);
-	if (0 != return_value)
-		goto free_hashes;
+		/* empty the list of files */
+		if (NULL != pair->entries) {
+			free(pair->entries);
+			pair->entries = NULL;
+			pair->entries_count = 0;
+		}
 
-	/* list the files under the read-only directory */
-	return_value = _readdir_single(&(((_dir_pair_t *) (intptr_t) fi->fh)->ro),
-	                               offset,
-	                               &hashes,
-	                               &hashes_count,
-	                               filler,
-	                               buf);
+		/* list the files under both directories */
+		return_value = _read_directory(&pair->rw, &pair->entries, &pair->entries_count);
+		if (0 != return_value)
+			goto end;
 
-free_hashes:
-	/* free the hashes list */
-	if (NULL != hashes)
-		free(hashes);
+		return_value = _read_directory(&pair->ro, &pair->entries, &pair->entries_count);
+		if (0 != return_value)
+			goto end;
+	} else {
+		/* if the last file was reached, report success */
+		if (offset == (off_t) pair->entries_count)
+			goto success;
+
+		/* if the offset is too big, report failure */
+		if (offset > (off_t) pair->entries_count) {
+			return_value = -ENOMEM;
+			goto end;
+		}
+	}
+
+
+	/* fetch one entry */
+	if (0 != filler(buf,
+	                (char *) &pair->entries[offset].name,
+	                &pair->entries[offset].attributes,
+	                1 + offset)) {
+		return_value = -ENOMEM;
+		goto end;
+	}
+
+success:
+	return_value = 0;
 
 end:
 	return return_value;
