@@ -464,8 +464,11 @@ next:
 		/* add the file to the array */
 		*entries = more_entries;
 		(*entries)[*entries_count].hash = hash;
-		(void) strcpy((char *) &(*entries)[*entries_count].name, (char *) &entry_pointer->d_name);
-		(void) memcpy(&(*entries)[*entries_count].attributes, &attributes, sizeof(attributes));
+		(void) strcpy((char *) &(*entries)[*entries_count].name,
+		              (char *) &entry_pointer->d_name);
+		(void) memcpy(&(*entries)[*entries_count].attributes,
+		              &attributes,
+		              sizeof(attributes));
 		++(*entries_count);
 	} while (1);
 
@@ -485,17 +488,20 @@ static int luufs_readdir(const char *path,
 	/* the return value */
 	int return_value = -EBADF;
 
+	/* the directory pair */
 	_dir_pair_t *pair;
 
 	/* make sure the directory was opened */
-	if (NULL == (void *) (intptr_t) fi->fh)
+	pair = (_dir_pair_t *) (intptr_t) fi->fh;
+	if (NULL == pair)
 		goto end;
 
-	pair = (_dir_pair_t *) (intptr_t) fi->fh;
 	if (0 == offset) {
 		/* return to the first file under each directory */
-		rewinddir(pair->rw.handle);
-		rewinddir(pair->ro.handle);
+		if (NULL != pair->rw.handle)
+			rewinddir(pair->rw.handle);
+		if (NULL != pair->ro.handle)
+			rewinddir(pair->ro.handle);
 
 		/* empty the list of files */
 		if (NULL != pair->entries) {
@@ -505,20 +511,24 @@ static int luufs_readdir(const char *path,
 		}
 
 		/* list the files under both directories */
-		return_value = _read_directory(&pair->rw, &pair->entries, &pair->entries_count);
+		return_value = _read_directory(&pair->rw,
+		                               &pair->entries,
+		                               &pair->entries_count);
 		if (0 != return_value)
 			goto end;
 
-		return_value = _read_directory(&pair->ro, &pair->entries, &pair->entries_count);
+		return_value = _read_directory(&pair->ro,
+		                               &pair->entries,
+		                               &pair->entries_count);
 		if (0 != return_value)
 			goto end;
 	} else {
 		/* if the last file was reached, report success */
-		if (offset == (off_t) pair->entries_count)
+		if ((unsigned int) offset == pair->entries_count)
 			goto success;
 
 		/* if the offset is too big, report failure */
-		if (offset > (off_t) pair->entries_count) {
+		if ((unsigned int) offset > pair->entries_count) {
 			return_value = -ENOMEM;
 			goto end;
 		}
