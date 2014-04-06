@@ -40,9 +40,6 @@ static void *luufs_init(struct fuse_conn_info *conn) {
 	return NULL;
 }
 
-static void luufs_destroy(void *data) {
-}
-
 static int luufs_create(const char *name,
                         mode_t mode,
                         struct fuse_file_info *fi) {
@@ -417,6 +414,9 @@ int _read_directory(_dir_t *directory,
 	/* the enlarged entries array */
 	_entry_t *more_entries;
 
+	/* the current entry */
+	_entry_t *current_entry;
+
 	/* a loop index */
 	unsigned int i;
 
@@ -439,7 +439,8 @@ next:
 		hash = crc32_hash((const unsigned char *) &entry_pointer->d_name,
 		                  strnlen((char *) &entry_pointer->d_name, NAME_MAX));
 
-		/* if there's another file with the same hash, continue to the next one */
+		/* if there's another file with the same hash, continue to the next
+		 * one */
 		for (i = 0; *entries_count > i; ++i) {
 			if (hash == (*entries)[i].hash)
 				goto next;
@@ -455,7 +456,8 @@ next:
 			continue;
 
 		/* enlarge the entries array */
-		more_entries = realloc(*entries, sizeof(_entry_t) * (1 + *entries_count));
+		more_entries = realloc(*entries,
+		                       sizeof(_entry_t) * (1 + *entries_count));
 		if (NULL == more_entries) {
 			return_value = -ENOMEM;
 			goto end;
@@ -463,10 +465,12 @@ next:
 
 		/* add the file to the array */
 		*entries = more_entries;
-		(*entries)[*entries_count].hash = hash;
-		(void) strcpy((char *) &(*entries)[*entries_count].name,
-		              (char *) &entry_pointer->d_name);
-		(void) memcpy(&(*entries)[*entries_count].attributes,
+		current_entry = &(*entries)[*entries_count];
+		current_entry->hash = hash;
+		(void) strncpy((char *) &current_entry->name,
+		               (char *) &entry_pointer->d_name,
+		               sizeof(current_entry->name) / sizeof(char));
+		(void) memcpy(&current_entry->attributes,
 		              &attributes,
 		              sizeof(attributes));
 		++(*entries_count);
@@ -496,32 +500,35 @@ static int luufs_readdir(const char *path,
 	if (NULL == pair)
 		goto end;
 
+	/* update the list of files each time the first file is requested (i.e after
+	 * a rewinddir() call) */
 	if (0 == offset) {
-		/* return to the first file under each directory */
-		if (NULL != pair->rw.handle)
-			rewinddir(pair->rw.handle);
-		if (NULL != pair->ro.handle)
-			rewinddir(pair->ro.handle);
-
-		/* empty the list of files */
+		/* first, empty the list of files */
 		if (NULL != pair->entries) {
 			free(pair->entries);
 			pair->entries = NULL;
 			pair->entries_count = 0;
 		}
 
-		/* list the files under both directories */
-		return_value = _read_directory(&pair->rw,
-		                               &pair->entries,
-		                               &pair->entries_count);
-		if (0 != return_value)
-			goto end;
+		/* then, list the files under both directories; start with the first
+		 * file */
+		if (NULL != pair->rw.handle) {
+			rewinddir(pair->rw.handle);
+			return_value = _read_directory(&pair->rw,
+			                               &pair->entries,
+			                               &pair->entries_count);
+			if (0 != return_value)
+				goto end;
+		}
 
-		return_value = _read_directory(&pair->ro,
-		                               &pair->entries,
-		                               &pair->entries_count);
-		if (0 != return_value)
-			goto end;
+		if (NULL != pair->ro.handle) {
+			rewinddir(pair->ro.handle);
+			return_value = _read_directory(&pair->ro,
+			                               &pair->entries,
+			                               &pair->entries_count);
+			if (0 != return_value)
+				goto end;
+		}
 	} else {
 		/* if the last file was reached, report success */
 		if ((unsigned int) offset == pair->entries_count)
@@ -799,7 +806,6 @@ end:
 
 static struct fuse_operations luufs_oper = {
 	.init		= luufs_init,
-	.destroy	= luufs_destroy,
 
 	.access		= luufs_access,
 	.getattr	= luufs_stat,
