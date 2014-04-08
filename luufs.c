@@ -529,6 +529,11 @@ static int luufs_readdir(const char *path,
 			if (0 != return_value)
 				goto end;
 		}
+
+		/* if both directories are empty (which may happen if they do not contain .
+		 * and ..), report success */
+		if (0 == pair->entries_count)
+			goto success;
 	} else {
 		/* if the last file was reached, report success */
 		if ((unsigned int) offset == pair->entries_count)
