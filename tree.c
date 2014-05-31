@@ -7,9 +7,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include "tree.h"
-#include "config.h"
 
-bool tree_create(const char *name) {
+bool tree_create(const char *name, const char *upper, const char *lower) {
 	/* the return value */
 	bool is_success = false;
 
@@ -30,7 +29,7 @@ bool tree_create(const char *name) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_READ_ONLY_DIRECTORY,
+	                lower,
 	                name);
 	if (-1 == stat((char *) &path, &attributes))
 		goto end;
@@ -44,7 +43,7 @@ bool tree_create(const char *name) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                upper,
 	                name);
 	if (-1 == mkdir((char *) &path, attributes.st_mode)) {
 		if (EEXIST != errno)
@@ -73,7 +72,7 @@ bool tree_create(const char *name) {
 		                "%s/%s",
 		                name,
 		                (char *) &entry->d_name);
-		if (false == tree_create((char *) &path))
+		if (false == tree_create((char *) &path, upper, lower))
 			goto close_directory;
 	} while (1);
 

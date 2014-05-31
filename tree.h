@@ -3,6 +3,6 @@
 
 #	include <stdbool.h>
 
-bool tree_create(const char *name);
+bool tree_create(const char *name, const char *upper, const char *lower);
 
 #endif

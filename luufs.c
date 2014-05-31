@@ -11,9 +11,8 @@
 #include <dirent.h>
 #include <stdint.h>
 #include <string.h>
+#include <zlib.h>
 #include "tree.h"
-#include "crc32.h"
-#include "config.h"
 
 typedef struct {
 	DIR *handle;
@@ -23,7 +22,7 @@ typedef struct {
 typedef struct {
 	char name[1 + NAME_MAX];
 	struct stat attributes;
-	crc32_t hash;
+	uLong hash;
 } _entry_t;
 
 typedef struct {
@@ -34,9 +33,14 @@ typedef struct {
 } _dir_pair_t;
 
 static int luufs_stat(const char *name, struct stat *stbuf);
+static int luufs_open(const char *name, struct fuse_file_info *fi);
+
+const char *g_lower_directory = NULL;
+const char *g_upper_directory = NULL;
+const char *g_mount_point = NULL;
 
 static void *luufs_init(struct fuse_conn_info *conn) {
-	(void) tree_create("/");
+	(void) tree_create("/", g_upper_directory, g_lower_directory);
 	return NULL;
 }
 
@@ -59,14 +63,19 @@ static int luufs_create(const char *name,
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	fi->fh = creat((char *) &path, mode);
 	if (-1 == fi->fh)
 		goto failure;
 
-	/* report success */
-	return 0;
+	/* close the file */
+	(void) close(fi->fh);
+
+	/* open the newly created file with the requested flags */
+	fi->flags &= ~O_CREAT;
+	fi->flags &= ~O_EXCL;
+	return luufs_open(name, fi);
 
 failure:
 	return -errno;
@@ -80,7 +89,7 @@ static int luufs_truncate(const char *name, off_t size) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == truncate((char *) &path, size))
 		return 0;
@@ -96,7 +105,7 @@ static int luufs_open(const char *name, struct fuse_file_info *fi) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	fi->fh = open((char *) &path, fi->flags);
 	if (-1 != fi->fh)
@@ -109,7 +118,7 @@ static int luufs_open(const char *name, struct fuse_file_info *fi) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_READ_ONLY_DIRECTORY,
+	                g_lower_directory,
 	                name);
 	fi->fh = open((char *) &path, fi->flags);
 	if (-1 != fi->fh)
@@ -127,7 +136,7 @@ static int luufs_access(const char *name, int mask) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == access((char *) &path, mask))
 		return 0;
@@ -139,7 +148,7 @@ static int luufs_access(const char *name, int mask) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_READ_ONLY_DIRECTORY,
+	                g_lower_directory,
 	                name);
 	if (0 == access((char *) &path, mask))
 		return 0;
@@ -156,7 +165,7 @@ static int luufs_stat(const char *name, struct stat *stbuf) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == lstat((char *) &path, stbuf))
 		return 0;
@@ -168,7 +177,7 @@ static int luufs_stat(const char *name, struct stat *stbuf) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_READ_ONLY_DIRECTORY,
+	                g_lower_directory,
 	                name);
 	if (0 == lstat((char *) &path, stbuf))
 		return 0;
@@ -230,7 +239,7 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (-1 == mkdir((char *) &path, mode)) {
 		return_value = -errno;
@@ -259,14 +268,14 @@ static int luufs_rmdir(const char *name) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_READ_ONLY_DIRECTORY,
+	                g_lower_directory,
 	                name);
 	if (0 == stat((char *) &path, &attributes)) {
-		return_value = -EPERM;
+		return_value = -EROFS;
 		goto end;
 	} else {
 		if (ENOENT != errno) {
-			errno = -ENOMEM;
+			return_value = -ENOMEM;
 			goto end;
 		}
 	}
@@ -275,7 +284,7 @@ static int luufs_rmdir(const char *name) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	return_value = rmdir((char *) &path);
 	if (-1 == return_value)
@@ -287,7 +296,7 @@ end:
 
 static int luufs_unlink(const char *name) {
 	/* the return value */
-	int return_value;
+	int return_value = -ENOENT;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -296,23 +305,22 @@ static int luufs_unlink(const char *name) {
 	struct stat attributes;
 
 	/* make sure the file exists */
-	return_value = luufs_stat(name, &attributes);
-	if (-ENOENT == return_value)
+	if (0 != luufs_stat(name, &attributes))
 		goto end;
 
 	/* try to remove the file from the writeable directory */
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == unlink((char *) &path))
 		return 0;
 
-	/* if the file exists only under the read-only directory, return EACCESS
+	/* if the file exists only under the read-only directory, return EROFS
 	 * upon failure to delete it */
 	if (ENOENT == errno)
-		return_value = -EACCES;
+		return_value = -EROFS;
 	else
 		return_value = -errno;
 
@@ -333,7 +341,7 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi) {
 	(void) snprintf((char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->rw.path),
 	                sizeof(((_dir_t *) NULL)->path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	((_dir_pair_t *) (intptr_t) fi->fh)->rw.handle = opendir(
 	                  (char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->rw.path));
@@ -346,7 +354,7 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi) {
 	(void) snprintf((char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->ro.path),
 	                sizeof(((_dir_t *) NULL)->path),
 	                "%s/%s",
-	                CONFIG_READ_ONLY_DIRECTORY,
+	                g_lower_directory,
 	                name);
 	((_dir_pair_t *) (intptr_t) fi->fh)->ro.handle = opendir(
 	                  (char *) &(((_dir_pair_t *) (intptr_t) fi->fh)->ro.path));
@@ -406,7 +414,7 @@ int _read_directory(_dir_t *directory,
 	struct stat attributes;
 
 	/* the file name hash */
-	crc32_t hash;
+	uLong hash;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -436,8 +444,10 @@ next:
 		}
 
 		/* hash the file name */
-		hash = crc32_hash((const unsigned char *) &entry_pointer->d_name,
-		                  strnlen((char *) &entry_pointer->d_name, NAME_MAX));
+		hash = crc32(
+		      crc32(0L, NULL, 0),
+		      (const Bytef *) &entry_pointer->d_name,
+		      (uInt) strnlen((char *) &entry_pointer->d_name, NAME_MAX));
 
 		/* if there's another file with the same hash, continue to the next
 		 * one */
@@ -580,7 +590,7 @@ static int luufs_symlink(const char *to, const char *from) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                from);
 	if (0 == symlink(to, (char *) &path))
 		return 0;
@@ -600,7 +610,7 @@ static int luufs_readlink(const char *name, char *buf, size_t size) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	length = readlink((char *) &path, buf, (size - sizeof(char)));
 	if (-1 == length) {
@@ -613,7 +623,7 @@ static int luufs_readlink(const char *name, char *buf, size_t size) {
 		(void) snprintf((char *) &path,
 		                sizeof(path),
 		                "%s/%s",
-		                CONFIG_READ_ONLY_DIRECTORY,
+		                g_lower_directory,
 		                name);
 		length = readlink((char *) &path, buf, (size - sizeof(char)));
 		if (-1 == length)
@@ -632,7 +642,7 @@ failure:
 
 static int luufs_utimens(const char *name, const struct timespec tv[2]) {
 	/* the return value */
-	int return_value;
+	int return_value = -ENOENT;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -641,23 +651,22 @@ static int luufs_utimens(const char *name, const struct timespec tv[2]) {
 	struct stat attributes;
 
 	/* make sure the file exists */
-	return_value = luufs_stat(name, &attributes);
-	if (-ENOENT == return_value)
+	if (0 != luufs_stat(name, &attributes))
 		goto end;
 
 	/* try to change the file modification time, in the writeable directory */
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == utimensat(0, (char *) &path, tv, AT_SYMLINK_NOFOLLOW))
 		return 0;
 
-	/* if the file exists only under the read-only directory, return EACCESS
+	/* if the file exists only under the read-only directory, return EROFS
 	 * upon failure to change its modification time */
 	if (ENOENT == errno)
-		return_value = -EACCES;
+		return_value = -EROFS;
 	else
 		return_value = -errno;
 
@@ -667,7 +676,7 @@ end:
 
 static int luufs_chmod(const char *name, mode_t mode) {
 	/* the return value */
-	int return_value;
+	int return_value = -ENOENT;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -676,23 +685,22 @@ static int luufs_chmod(const char *name, mode_t mode) {
 	struct stat attributes;
 
 	/* make sure the file exists */
-	return_value = luufs_stat(name, &attributes);
-	if (-ENOENT == return_value)
+	if (0 != luufs_stat(name, &attributes))
 		goto end;
 
 	/* try to change the file permissions, in the writeable directory */
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == chmod((char *) &path, mode))
 		return 0;
 
-	/* if the file exists only under the read-only directory, return EACCESS
+	/* if the file exists only under the read-only directory, return EROFS
 	 * upon failure to change its permissions */
 	if (ENOENT == errno)
-		return_value = -EACCES;
+		return_value = -EROFS;
 	else
 		return_value = -errno;
 
@@ -702,7 +710,7 @@ end:
 
 static int luufs_chown(const char *name, uid_t uid, gid_t gid) {
 	/* the return value */
-	int return_value;
+	int return_value = -ENOENT;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -711,23 +719,22 @@ static int luufs_chown(const char *name, uid_t uid, gid_t gid) {
 	struct stat attributes;
 
 	/* make sure the file exists */
-	return_value = luufs_stat(name, &attributes);
-	if (-ENOENT == return_value)
+	if (0 != luufs_stat(name, &attributes))
 		goto end;
 
 	/* try to change the file owner, in the writeable directory */
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == chown((char *) &path, uid, gid))
 		return 0;
 
-	/* if the file exists only under the read-only directory, return EACCESS
+	/* if the file exists only under the read-only directory, return EROFS
 	 * upon failure to change its owner */
 	if (ENOENT == errno)
-		return_value = -EACCES;
+		return_value = -EROFS;
 	else
 		return_value = -errno;
 
@@ -737,7 +744,7 @@ end:
 
 static int luufs_rename(const char *oldpath, const char *newpath) {
 	/* the return value */
-	int return_value;
+	int return_value = -ENOENT;
 
 	/* the original path */
 	char original_path[PATH_MAX];
@@ -749,28 +756,27 @@ static int luufs_rename(const char *oldpath, const char *newpath) {
 	struct stat attributes;
 
 	/* make sure the file exists */
-	return_value = luufs_stat(oldpath, &attributes);
-	if (-ENOENT == return_value)
+	if (0 != luufs_stat(oldpath, &attributes))
 		goto end;
 
 	/* try to move the file, in the writeable directory */
 	(void) snprintf((char *) &original_path,
 	                sizeof(original_path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                oldpath);
 	(void) snprintf((char *) &new_path,
 	                sizeof(new_path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                newpath);
 	if (0 == rename((char *) &original_path, (char *) &new_path))
 		return 0;
 
-	/* if the file exists only under the read-only directory, return EACCESS
+	/* if the file exists only under the read-only directory, return EROFS
 	 * upon failure to move it */
 	if (ENOENT == errno)
-		return_value = -EACCES;
+		return_value = -EROFS;
 	else
 		return_value = -errno;
 
@@ -798,7 +804,7 @@ static int luufs_mknod(const char *name, mode_t mode, dev_t dev) {
 	(void) snprintf((char *) &path,
 	                sizeof(path),
 	                "%s/%s",
-	                CONFIG_WRITEABLE_DIRECTORY,
+	                g_upper_directory,
 	                name);
 	if (0 == mknod((char *) &path, mode, dev))
 		return_value = 0;
@@ -842,6 +848,49 @@ static struct fuse_operations luufs_oper = {
 	.mknod		= luufs_mknod
 };
 
+int _parse_parameter(void *data,
+                     const char *arg,
+                     int key,
+                     struct fuse_args *outargs) {
+	if (FUSE_OPT_KEY_NONOPT != key)
+		return 1;
+
+	if (NULL == g_lower_directory) {
+		g_lower_directory = arg;
+		return 0;
+	} else {
+		if (NULL == g_upper_directory) {
+			g_upper_directory = arg;
+			return 0;
+		} else {
+			if (NULL == g_mount_point) {
+				g_mount_point = arg;
+				return 1;
+			} else
+				return (-1);
+		}
+
+	}
+}
+
 int main(int argc, char *argv[]) {
-	return fuse_main(argc, argv, &luufs_oper, NULL);
+	/* the exit code */
+	int exit_code = EXIT_FAILURE;
+
+	/* the command-pine arguments passed to FUSE */
+	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+
+	/* the parse the command-line */
+	if (-1 == fuse_opt_parse(&args, NULL, NULL, _parse_parameter))
+		goto end;
+
+	/* if not all arguments were passed, report failure */
+	if (NULL == g_mount_point)
+		goto end;
+
+	/* run FUSE */
+	exit_code = fuse_main(args.argc, args.argv, &luufs_oper, NULL);
+
+end:
+	return exit_code;
 }
