@@ -1,15 +1,17 @@
 CC ?= cc
 CFLAGS ?= -Wall -pedantic -std=gnu99
 LDFLAGS ?=
-CFLAGS += $(shell pkg-config --cflags fuse zlib)
-LIBS = $(shell pkg-config --libs fuse zlib)
+FUSE_CFLAGS = $(shell pkg-config --cflags fuse)
+ZLIB_CFLAGS = $(shell pkg-config --cflags zlib)
+FUSE_LIBS = $(shell pkg-config --libs fuse)
+ZLIB_LIBS = $(shell pkg-config --libs zlib)
 DESTDIR ?= /
 SBIN_DIR ?= sbin
 DOC_DIR ?= usr/share/doc/luufs
 MAN_DIR ?= usr/share/man
 
 luufs: luufs.c tree.c tree.h
-	$(CC) $(CFLAGS) tree.c luufs.c $(LDFLAGS) $(LIBS) -o luufs
+	$(CC) $(CFLAGS) $(FUSE_CFLAGS) $(ZLIB_CFLAGS) tree.c luufs.c $(LDFLAGS) $(FUSE_LIBS) $(ZLIB_LIBS) -o luufs
 
 clean:
 	rm -f luufs
