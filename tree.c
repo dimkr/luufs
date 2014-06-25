@@ -50,6 +50,10 @@ bool tree_create(const char *name, const char *upper, const char *lower) {
 			goto close_directory;
 	}
 
+	/* set the directory ownership */
+	if (-1 == chown((char *) &path, attributes.st_uid, attributes.st_gid))
+		goto close_directory;
+
 	do {
 		/* read the details of a file under the directory */
 		if (0 != readdir_r(directory, &_entry, &entry))
