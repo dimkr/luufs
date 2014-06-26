@@ -53,6 +53,16 @@ static int luufs_create(const char *name,
 	/* the file attributes */
 	struct stat attributes;
 
+	/* the operation context */
+	struct fuse_context *context;
+
+	/* get the operation context */
+	context = fuse_get_context();
+	if (NULL == context) {
+		errno = ENOMEM;
+		goto failure;
+	}
+
 	/* make sure the file does not exist */
 	if (-ENOENT != luufs_stat(name, &attributes)) {
 		errno = EEXIST;
@@ -68,6 +78,13 @@ static int luufs_create(const char *name,
 	fi->fh = creat((char *) &path, mode);
 	if (-1 == fi->fh)
 		goto failure;
+
+	/* set the file owner */
+	if (-1 == chown((char *) &path, context->uid, context->gid)) {
+		(void) unlink((char *) &path);
+		errno = EACCES;
+		goto failure;
+	}
 
 	/* close the file */
 	(void) close(fi->fh);
@@ -223,7 +240,7 @@ static int luufs_write(const char *path,
 
 static int luufs_mkdir(const char *name, mode_t mode) {
 	/* the return value */
-	int return_value = -EEXIST;
+	int return_value = -ENOMEM;
 
 	/* the file path */
 	char path[PATH_MAX];
@@ -231,9 +248,20 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 	/* the directory attributes */
 	struct stat attributes;
 
-	/* make sure the directory does not exist */
-	if (-ENOENT != luufs_stat(name, &attributes))
+	/* the operation context */
+	struct fuse_context *context;
+
+	/* get the operation context */
+	context = fuse_get_context();
+	if (NULL == context) {
 		goto end;
+	}
+
+	/* make sure the directory does not exist */
+	if (-ENOENT != luufs_stat(name, &attributes)) {
+		return_value = -EEXIST;
+		goto end;
+	}
 
 	/* create the directory, under the writeable directory */
 	(void) snprintf((char *) &path,
@@ -243,6 +271,13 @@ static int luufs_mkdir(const char *name, mode_t mode) {
 	                name);
 	if (-1 == mkdir((char *) &path, mode)) {
 		return_value = -errno;
+		goto end;
+	}
+
+	/* set the directory owner */
+	if (-1 == chown((char *) &path, context->uid, context->gid)) {
+		(void) rmdir((char *) &path);
+		return_value = -EACCES;
 		goto end;
 	}
 
