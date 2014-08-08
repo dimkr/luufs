@@ -6,87 +6,85 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+
 #include "tree.h"
 
 bool tree_create(const char *name, const char *upper, const char *lower) {
-	/* the return value */
-	bool is_success = false;
-
 	/* the directory path */
-	char path[PATH_MAX];
-
-	/* the directory */
-	DIR *directory;
+	char path[PATH_MAX] = {'\0'};
 
 	/* the directory attributes */
-	struct stat attributes;
+	struct stat attributes = {0};
 
 	/* a file under the directory */
-	struct dirent _entry;
+	struct dirent _entry = {0};
+
+	/* the return value */
+	bool result = false;
+
+	/* the directory */
+	DIR *directory = NULL;
+
+	/* the return value of readdir_r() */
 	struct dirent *entry;
 
 	/* get the directory attributes */
-	(void) snprintf((char *) &path,
-	                sizeof(path),
-	                "%s/%s",
-	                lower,
-	                name);
-	if (-1 == stat((char *) &path, &attributes))
+	(void) snprintf(path, sizeof(path), "%s/%s", lower, name);
+	if (-1 == stat(path, &attributes)) {
 		goto end;
+	}
 
 	/* open the directory */
 	directory = opendir(path);
-	if (NULL == directory)
+	if (NULL == directory) {
 		goto end;
+	}
 
 	/* create the directory, under the writeable branch */
-	(void) snprintf((char *) &path,
-	                sizeof(path),
-	                "%s/%s",
-	                upper,
-	                name);
-	if (-1 == mkdir((char *) &path, attributes.st_mode)) {
-		if (EEXIST != errno)
+	(void) snprintf(path, sizeof(path), "%s/%s", upper, name);
+	if (-1 == mkdir(path, attributes.st_mode)) {
+		if (EEXIST != errno) {
 			goto close_directory;
+		}
 	}
 
 	/* set the directory ownership */
-	if (-1 == chown((char *) &path, attributes.st_uid, attributes.st_gid))
+	if (-1 == chown((char *) &path, attributes.st_uid, attributes.st_gid)) {
 		goto close_directory;
+	}
 
 	do {
 		/* read the details of a file under the directory */
-		if (0 != readdir_r(directory, &_entry, &entry))
-			goto close_directory;
-		if (NULL == entry)
+		if (0 != readdir_r(directory, &_entry, &entry)) {
 			break;
+		}
+		if (NULL == entry) {
+			result = true;
+			break;
+		}
 
 		/* skip non-directory entries */
-		if (DT_DIR != entry->d_type)
+		if (DT_DIR != entry->d_type) {
 			continue;
+		}
 
 		/* skip relative paths */
 		if ((0 == strcmp(".", (char *) &entry->d_name)) ||
-		    (0 == strcmp("..", (char *) &entry->d_name)))
+		    (0 == strcmp("..", (char *) &entry->d_name))) {
 			continue;
+		}
 
 		/* recurse into sub-directories */
-		(void) snprintf((char *) &path,
-		                sizeof(path),
-		                "%s/%s",
-		                name,
-		                (char *) &entry->d_name);
-		if (false == tree_create((char *) &path, upper, lower))
-			goto close_directory;
+		(void) snprintf(path, sizeof(path), "%s/%s", name, entry->d_name);
+		if (false == tree_create(path, upper, lower)) {
+			break;
+		}
 	} while (1);
-
-	/* report success */
-	is_success = true;
 
 close_directory:
 	/* close the directory */
 	(void) closedir(directory);
 
 end:
-	return is_success;
+	return result;
 }
