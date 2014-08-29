@@ -299,7 +299,7 @@ static int luufs_unlink(const char *name) {
 	/* if the file exists only under the read-only directory, return EROFS
 	 * upon failure to delete it */
 	if (ENOENT == errno) {
-		return -ENOENT;
+		return -EROFS;
 	}
 
 	return -errno;
