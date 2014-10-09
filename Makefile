@@ -23,6 +23,9 @@ HEADERS = $(wildcard *.h)
 $(PROG): $(OBJECTS)
 	$(CC) -o $@ $^ $(LDFLAGS) $(FUSE_LIBS) $(ZLIB_LIBS)
 
+test: $(PROG)
+	sh test.sh
+
 clean:
 	rm -f $(PROG) $(OBJECTS)
 

@@ -9,6 +9,25 @@ Overview
 
 luufs is a lazy man's, user-mode union file system.
 
+It takes two directories and creates a magical directory which shows their
+unified contents.
+
+luufs is a "compile once, run anywhere" alternative for Aufs
+(http://aufs.sourceforge.net/) and Unionfs (http://unionfs.filesystems.org/),
+implemented in user-mode via FUSE (http://fuse.sourceforge.net/).
+
+However, luufs is very simple, so it does not fit in all use cases of more
+complex union file systems. It operates according to two rules:
+  1) The first directory is read-only and the second one is writable. New files
+     are created under the writable directory, but read from both directories.
+  2) If a file exists under both directories, the one under the read-only
+     directory is preferred. This improves security, as files (e.g /bin/login)
+     cannot be overwritten using external access to the writable directory.
+
+Threfore, luufs can be used to secure servers: they can be trapped under a luufs
+mount point (using chroot), with a writeable directory mounted with the
+MS_NOEXEC and MS_NODEV flags.
+
 Legal Information
 =================
 
