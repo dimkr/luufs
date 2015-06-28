@@ -503,9 +503,11 @@ next:
 
 		/* if there's another file with the same hash, continue to the next
 		 * one */
-		for (i = 0; *entries_count > i; ++i) {
-			if (hash == (*entries)[i].hash) {
-				goto next;
+		if (NULL != *entries) {
+			for (i = 0; *entries_count > i; ++i) {
+				if (hash == (*entries)[i].hash) {
+					goto next;
+				}
 			}
 		}
 
