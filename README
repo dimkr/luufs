@@ -17,21 +17,23 @@ luufs is a "compile once, run anywhere" alternative for Aufs
 implemented in user-mode via FUSE (http://fuse.sourceforge.net/).
 
 However, luufs is very simple, so it does not fit in all use cases of more
-complex union file systems. It operates according to two rules:
+complex union file systems. It operates according to three rules:
   1) The first directory is read-only and the second one is writeable. New files
      are created under the writeable directory, but read from both directories.
   2) If a file exists under both directories, the one under the read-only
      directory is preferred. This improves security, as files (e.g /bin/login)
      cannot be overwritten using external access to the writeable directory.
+  3) Non-root processes cannot open new file descriptors via luufs (e.g open
+     files), but can use existing file descriptors.
 
-Threfore, luufs can be used to secure servers: they can be trapped under a luufs
-mount point (using chroot), with a writeable directory mounted with the
+Therefore, luufs can be used to secure servers: they can be trapped under a
+luufs mount point (using chroot), with a writeable directory mounted with the
 MS_NOEXEC and MS_NODEV flags.
 
 Legal Information
 =================
 
-luufs is licensed under a 2-clause BSD license, see COPYING for the license
+luufs is licensed under the MIT license, see COPYING for the license
 text. For a list of its authors and contributors, see AUTHORS.
 
 The ASCII art logo at the top was made using FIGlet (http://www.figlet.org/).
