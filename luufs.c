@@ -78,8 +78,7 @@ static int luufs_open(const char *name, struct fuse_file_info *fi)
 	LUUFS_CALL_HEAD();
 
 	/* when a file is opened for reading, prefer the read-only directory */
-	/* TODO: 3? */
-	if (O_RDONLY == (fi->flags & 3)) {
+	if ((0 == (O_WRONLY & fi->flags)) && (0 == (O_RDWR & fi->flags))) {
 		fd = openat(ctx->ro, &name[1], fi->flags);
 		if (-1 != fd)
 			goto ok;
@@ -133,7 +132,7 @@ static int luufs_create(const char *name,
 		goto out;
 	}
 
-	fd = openat(ctx->rw, &name[1], O_CREAT | O_EXCL | mode, mode);
+	fd = openat(ctx->rw, &name[1], O_CREAT | O_EXCL | fi->flags, mode);
 	if (-1 == fd) {
 		ret = -errno;
 		goto out;
@@ -244,19 +243,26 @@ static int luufs_stat(const char *name, struct stat *stbuf)
 static int luufs_access(const char *name, int mask)
 {
 	struct stat stbuf;
+	const char *namep;
 
 	LUUFS_CALL_HEAD();
 
-	if (0 != (F_OK & mask))
-		return luufs_stat(name, &stbuf);
+	if (0 == strcmp("/", name))
+		namep = name;
+	else
+		namep = &name[1];
 
-	/* perform all access checks except W_OK on the read-only directory */
+	if (0 != (F_OK & mask))
+		return luufs_stat(namep, &stbuf);
+
+	/* perform all access checks except W_OK on the read-only directory; musl
+	 * does not support AT_SYMLINK_NOFOLLOW so we don't pass this flag */
 	if (0 != (W_OK & mask)) {
-		if (-1 == faccessat(ctx->rw, &name[1], mask, AT_SYMLINK_NOFOLLOW))
+		if (-1 == faccessat(ctx->rw, namep, mask, 0))
 			return -errno;
 	}
 	else {
-		if (-1 == faccessat(ctx->ro, &name[1], mask, AT_SYMLINK_NOFOLLOW))
+		if (-1 == faccessat(ctx->ro, namep, mask, 0))
 			return -errno;
 	}
 
@@ -333,7 +339,10 @@ static int luufs_mkdir(const char *name, mode_t mode)
 
 	/* if the directory exists under the read-only directory, return EEXIST in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &name[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &name[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EEXIST;
 	if (ENOENT != errno)
 		return -errno;
@@ -361,7 +370,10 @@ static int luufs_rmdir(const char *name)
 
 	/* if the directory exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &name[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &name[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -569,7 +581,10 @@ static int luufs_symlink(const char *to, const char *from)
 
 	/* if the link source exists under the read-only directory, return EEXIST in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &from[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &from[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EEXIST;
 	if (ENOENT != errno)
 		return -errno;
@@ -619,7 +634,10 @@ static int luufs_mknod(const char *name, mode_t mode, dev_t dev)
 
 	/* if the device exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &name[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &name[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -641,7 +659,10 @@ static int luufs_chmod(const char *name, mode_t mode)
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &name[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &name[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -660,7 +681,10 @@ static int luufs_chown(const char *name, uid_t uid, gid_t gid)
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &name[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &name[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -683,7 +707,10 @@ static int luufs_utimens(const char *name, const struct timespec tv[2])
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &name[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &name[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -701,14 +728,20 @@ static int luufs_rename(const char *oldpath, const char *newpath)
 	LUUFS_CALL_HEAD();
 
 	/* if the file belongs to the read-only directory, return EROFS in errno */
-	if (0 == fstatat(ctx->ro, &oldpath[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &oldpath[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
 
 	/* if the destination exists under the read-only directory, return EEXIST in
 	 * errno */
-	if (0 == fstatat(ctx->ro, &newpath[1], &stbuf, AT_SYMLINK_NOFOLLOW))
+	if (0 == fstatat(ctx->ro,
+	                 &newpath[1],
+	                 &stbuf,
+	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EEXIST;
 	if (ENOENT != errno)
 		return -errno;
@@ -793,8 +826,10 @@ static int mirror_dirs(const int src, const int dest) {
 		}
 
 		if (-1 == mkdirat(dest, entp->d_name, stbuf.st_mode)) {
-			ret = -1;
-			break;
+			if (EEXIST != errno) {
+				ret = -1;
+				break;
+			}
 		}
 
 		nsrc = openat(src, entp->d_name, O_DIRECTORY);
@@ -831,6 +866,12 @@ int main(int argc, char *argv[])
 	int ret;
 	int fd;
 
+	if (4 != argc) {
+		(void) fprintf(stderr, "Usage: %s RO RW TARGET\n", argv[0]);
+		ret = EXIT_FAILURE;
+		goto out;
+	}
+
 	/* open both directories, so we can pass their file descriptors to the
 	 * *at() system calls later */
 	ctx.ro = open(argv[1], O_DIRECTORY);
@@ -852,8 +893,8 @@ int main(int argc, char *argv[])
 		goto close_ro;
 	}
 	ret = mirror_dirs(fd, ctx.rw);
-	(void) close(fd);
 	if (-1 == ret) {
+		(void) close(fd);
 		ret = EXIT_FAILURE;
 		goto close_ro;
 	}
