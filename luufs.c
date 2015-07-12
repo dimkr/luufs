@@ -902,7 +902,7 @@ int main(int argc, char *argv[])
 	ctx.init = crc32(0L, Z_NULL, 0);
 	fuse_argv[0] = argv[0];
 	fuse_argv[1] = argv[3];
-	fuse_argv[2] = "-ononempty";
+	fuse_argv[2] = "-ononempty,suid,dev,allow_other,default_permissions";
 	fuse_argv[3] = NULL;
 	ret = fuse_main(3, fuse_argv, &luufs_oper, &ctx);
 
