@@ -898,7 +898,8 @@ static int openat_stub(int dirfd, const char *pathname, int flags, ...)
 
 static int unlinkat_stub(int dirfd, const char *pathname, int flags)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int fchownat_stub(int dirfd,
@@ -907,17 +908,20 @@ static int fchownat_stub(int dirfd,
                          gid_t group,
                          int flags)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int mkdirat_stub(int dirfd, const char *pathname, mode_t mode)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int mknodat_stub(int dirfd, const char *pathname, mode_t mode, dev_t dev)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int renameat_stub(int olddirfd,
@@ -925,14 +929,16 @@ static int renameat_stub(int olddirfd,
                          int newdirfd,
                          const char *newpath)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int symlinkat_stub(const char *oldpath,
                           int newdirfd,
                           const char *newpath)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int utimensat_stub(int dirfd,
@@ -940,7 +946,8 @@ static int utimensat_stub(int dirfd,
                           const struct timespec times[2],
                           int flags)
 {
-	return -EROFS;
+	errno = EROFS;
+	return -1;
 }
 
 static int fstatat_stub(int dirfd,
@@ -948,8 +955,10 @@ static int fstatat_stub(int dirfd,
                         struct stat *buf,
                         int flags)
 {
-	if (-1 == dirfd)
-		return -ENOENT;
+	if (-1 == dirfd) {
+		errno = ENOENT;
+		return -1;
+	}
 
 	return fstatat(dirfd, pathname, buf, flags);
 }
