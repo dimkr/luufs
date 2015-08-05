@@ -1,12 +1,14 @@
 .TH luufs 8
 .SH NAME
 .B luufs
-\- merge two directories
+\- mirror or merge directories
 .SH SYNOPSIS
 .B luufs
-RO RW TARGET
+RO [RW] TARGET
 .SH DESCRIPTION
-Create a directory which unifies the contents of two directories.
+Mirrors a directory without allowing any changes or creates a directory which
+unifies the contents of two directories, while redirecting all changes to the
+second one.
 .SH "SEE ALSO"
 .B ls(1), chroot(8), umount(8)
 .SH AUTHOR

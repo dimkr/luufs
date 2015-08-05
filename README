@@ -30,6 +30,10 @@ Therefore, luufs can be used to secure servers: they can be trapped under a
 luufs mount point (using chroot), with a writeable directory mounted with the
 MS_NOEXEC and MS_NODEV flags.
 
+In addition, luufs has a read-only mirroring mode, in which a directory is
+mirrored and changes are disallowed. It is similar to a bind mount, but may be
+read-only even if the specified directory is writable.
+
 Legal Information
 =================
 

@@ -32,6 +32,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 #include <zlib.h>
 #define FUSE_USE_VERSION (26)
@@ -40,9 +41,17 @@
 #define DIRENT_MAX 255
 
 struct luufs_ctx {
+	uLong init;
+	int (*openat)(int, const char *, int, ...);
+	int (*unlinkat)(int, const char *, int);
+	int (*fchownat)(int, const char *, uid_t, gid_t, int);
+	int (*mkdirat)(int, const char *, mode_t);
+	int (*mknodat)(int, const char *, mode_t, dev_t);
+	int (*renameat)(int, const char *, int, const char *);
+	int (*symlinkat)(const char *, int, const char *);
+	int (*utimensat)(int, const char *, const struct timespec[2], int);
 	int ro;
 	int rw;
-	uLong init;
 };
 
 struct luufs_dir_ctx {
@@ -79,7 +88,7 @@ static int luufs_open(const char *name, struct fuse_file_info *fi)
 
 	/* when a file is opened for reading, prefer the read-only directory */
 	if ((0 == (O_WRONLY & fi->flags)) && (0 == (O_RDWR & fi->flags))) {
-		fd = openat(ctx->ro, &name[1], fi->flags);
+		fd = ctx->openat(ctx->ro, &name[1], fi->flags);
 		if (-1 != fd)
 			goto ok;
 		if (ENOENT != errno)
@@ -96,7 +105,7 @@ static int luufs_open(const char *name, struct fuse_file_info *fi)
 	if (ENOENT != errno)
 		return -errno;
 
-	fd = openat(ctx->rw, &name[1], fi->flags);
+	fd = ctx->openat(ctx->rw, &name[1], fi->flags);
 	if (-1 == fd)
 		return -errno;
 
@@ -132,7 +141,7 @@ static int luufs_create(const char *name,
 		goto out;
 	}
 
-	fd = openat(ctx->rw, &name[1], O_CREAT | O_EXCL | fi->flags, mode);
+	fd = ctx->openat(ctx->rw, &name[1], O_CREAT | O_EXCL | fi->flags, mode);
 	if (-1 == fd) {
 		ret = -errno;
 		goto out;
@@ -195,10 +204,10 @@ static int luufs_truncate(const char *name, off_t size)
 	}
 
 	/* try to open the file - if it's missing, create it */
-	fd = openat(ctx->rw, &name[1], O_WRONLY);
+	fd = ctx->openat(ctx->rw, &name[1], O_WRONLY);
 	if (-1 == fd) {
 		if (ENOENT == errno) {
-			fd = openat(ctx->rw, &name[1], O_WRONLY | O_CREAT | O_EXCL);
+			fd = ctx->openat(ctx->rw, &name[1], O_WRONLY | O_CREAT | O_EXCL);
 			if (-1 != fd)
 				goto trunc;
 		}
@@ -325,7 +334,7 @@ static int luufs_unlink(const char *name)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (0 == unlinkat(ctx->rw, &name[1], 0))
+	if (0 == ctx->unlinkat(ctx->rw, &name[1], 0))
 		return 0;
 
 	return -errno;
@@ -347,15 +356,15 @@ static int luufs_mkdir(const char *name, mode_t mode)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (-1 == mkdirat(ctx->rw, &name[1], mode))
+	if (-1 == ctx->mkdirat(ctx->rw, &name[1], mode))
 		return -errno;
 
-	if (-1 == fchownat(ctx->rw,
-	                   &name[1],
-	                   fuse_ctx->uid,
-	                   fuse_ctx->gid,
-	                   AT_SYMLINK_NOFOLLOW)) {
-		(void) unlinkat(ctx->rw, &name[1], AT_REMOVEDIR);
+	if (-1 == ctx->fchownat(ctx->rw,
+	                        &name[1],
+	                        fuse_ctx->uid,
+	                        fuse_ctx->gid,
+	                        AT_SYMLINK_NOFOLLOW)) {
+		(void) ctx->unlinkat(ctx->rw, &name[1], AT_REMOVEDIR);
 		return -errno;
 	}
 
@@ -378,7 +387,7 @@ static int luufs_rmdir(const char *name)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (0 == unlinkat(ctx->rw, &name[1], AT_REMOVEDIR))
+	if (0 == ctx->unlinkat(ctx->rw, &name[1], AT_REMOVEDIR))
 		return 0;
 
 	return -errno;
@@ -404,7 +413,7 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi)
 	if (0 == cmp)
 		dir_ctx->f_ro = dup(ctx->ro);
 	else
-		dir_ctx->f_ro = openat(ctx->ro, &name[1], O_DIRECTORY);
+		dir_ctx->f_ro = ctx->openat(ctx->ro, &name[1], O_DIRECTORY);
 	if (-1 == dir_ctx->f_ro) {
 		if (ENOENT != errno) {
 			ret = -errno;
@@ -412,13 +421,17 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi)
 		}
 	}
 
-	if (0 == cmp)
-		dir_ctx->f_rw = dup(ctx->rw);
-	else
-		dir_ctx->f_rw = openat(ctx->rw, &name[1], O_DIRECTORY);
-	if (-1 == dir_ctx->f_rw) {
-		ret = -errno;
-		goto close_ro;
+	if (-1 == ctx->rw)
+		dir_ctx->f_rw = -1;
+	else {
+		if (0 == cmp)
+			dir_ctx->f_rw = dup(ctx->rw);
+		else
+			dir_ctx->f_rw = ctx->openat(ctx->rw, &name[1], O_DIRECTORY);
+		if (-1 == dir_ctx->f_rw) {
+			ret = -errno;
+			goto close_ro;
+		}
 	}
 
 	if (-1 == dir_ctx->f_ro)
@@ -431,10 +444,14 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi)
 		}
 	}
 
-	dir_ctx->d_rw = fdopendir(dir_ctx->f_rw);
-	if (NULL == dir_ctx->d_rw) {
-		ret = -errno;
-		goto close_rw;
+	if (-1 == dir_ctx->f_rw)
+		dir_ctx->d_rw = NULL;
+	else {
+		dir_ctx->d_rw = fdopendir(dir_ctx->f_rw);
+		if (NULL == dir_ctx->d_rw) {
+			ret = -errno;
+			goto close_rw;
+		}
 	}
 
 	fi->fh = (uint64_t) (uintptr_t) dir_ctx;
@@ -445,7 +462,8 @@ static int luufs_opendir(const char *name, struct fuse_file_info *fi)
 	dir_ctx->f_ro = -1;
 
 close_rw:
-	(void) close(dir_ctx->f_rw);
+	if (-1 != dir_ctx->f_rw)
+		(void) close(dir_ctx->f_rw);
 
 close_ro:
 	if (-1 != dir_ctx->f_ro)
@@ -589,15 +607,15 @@ static int luufs_symlink(const char *to, const char *from)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (-1 == symlinkat(to, ctx->rw, &from[1]))
+	if (-1 == ctx->symlinkat(to, ctx->rw, &from[1]))
 		return -errno;
 
-	if (-1 == fchownat(ctx->rw,
+	if (-1 == ctx->fchownat(ctx->rw,
 	                   &from[1],
 	                   fuse_ctx->uid,
 	                   fuse_ctx->gid,
 	                   AT_SYMLINK_NOFOLLOW)) {
-		(void) unlinkat(ctx->rw, &from[1], AT_REMOVEDIR);
+		(void) ctx->unlinkat(ctx->rw, &from[1], AT_REMOVEDIR);
 		return -errno;
 	}
 
@@ -642,7 +660,7 @@ static int luufs_mknod(const char *name, mode_t mode, dev_t dev)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (-1 == mknodat(ctx->rw,
+	if (-1 == ctx->mknodat(ctx->rw,
 	                  &name[1],
 	                  mode,
 	                  dev))
@@ -689,11 +707,11 @@ static int luufs_chown(const char *name, uid_t uid, gid_t gid)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (-1 == fchownat(ctx->rw,
-	                   &name[1],
-	                   uid,
-	                   gid,
-	                   AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (-1 == ctx->fchownat(ctx->rw,
+	                        &name[1],
+	                        uid,
+	                        gid,
+	                        AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -errno;
 
 	return 0;
@@ -715,7 +733,7 @@ static int luufs_utimens(const char *name, const struct timespec tv[2])
 	if (ENOENT != errno)
 		return -errno;
 
-	if (-1 == utimensat(ctx->rw, &name[1], tv, AT_SYMLINK_NOFOLLOW))
+	if (-1 == ctx->utimensat(ctx->rw, &name[1], tv, AT_SYMLINK_NOFOLLOW))
 		return -errno;
 
 	return 0;
@@ -746,10 +764,10 @@ static int luufs_rename(const char *oldpath, const char *newpath)
 	if (ENOENT != errno)
 		return -errno;
 
-	if (-1 == renameat(ctx->rw,
-	                   &oldpath[1],
-	                   ctx->rw,
-	                   &newpath[1]))
+	if (-1 == ctx->renameat(ctx->rw,
+	                        &oldpath[1],
+	                        ctx->rw,
+	                        &newpath[1]))
 		return -errno;
 
 	return 0;
@@ -859,6 +877,67 @@ end:
 	return ret;
 }
 
+static int openat_stub(int dirfd, const char *pathname, int flags, ...)
+{
+	va_list ap;
+	int ret;
+
+	if (0 != ((O_CREAT | O_WRONLY | O_RDWR) & flags))
+		return -EROFS;
+
+	va_start(ap, flags);
+	ret = openat(dirfd, pathname, flags, va_arg(ap, mode_t));
+	va_end(ap);
+	return ret;
+}
+
+static int unlinkat_stub(int dirfd, const char *pathname, int flags)
+{
+	return -EROFS;
+}
+
+static int fchownat_stub(int dirfd,
+                         const char *pathname,
+                         uid_t owner,
+                         gid_t group,
+                         int flags)
+{
+	return -EROFS;
+}
+
+static int mkdirat_stub(int dirfd, const char *pathname, mode_t mode)
+{
+	return -EROFS;
+}
+
+static int mknodat_stub(int dirfd, const char *pathname, mode_t mode, dev_t dev)
+{
+	return -EROFS;
+}
+
+static int renameat_stub(int olddirfd,
+                         const char *oldpath,
+                         int newdirfd,
+                         const char *newpath)
+{
+	return -EROFS;
+}
+
+static int symlinkat_stub(const char *oldpath,
+                          int newdirfd,
+                          const char *newpath)
+{
+	return -EROFS;
+}
+
+static int utimensat_stub(int dirfd,
+                          const char *pathname,
+                          const struct timespec times[2],
+                          int flags)
+{
+	return -EROFS;
+}
+
 int main(int argc, char *argv[])
 {
 	char *fuse_argv[4];
@@ -866,8 +945,8 @@ int main(int argc, char *argv[])
 	int ret;
 	int fd;
 
-	if (4 != argc) {
-		(void) fprintf(stderr, "Usage: %s RO RW TARGET\n", argv[0]);
+	if ((3 != argc) && (4 != argc)) {
+		(void) fprintf(stderr, "Usage: %s RO [RW] TARGET\n", argv[0]);
 		ret = EXIT_FAILURE;
 		goto out;
 	}
@@ -880,33 +959,61 @@ int main(int argc, char *argv[])
 		goto out;
 	}
 
-	ctx.rw = open(argv[2], O_DIRECTORY);
-	if (-1 == ctx.rw) {
-		ret = EXIT_FAILURE;
-		goto close_ro;
-	}
+	if (3 == argc) {
+		ctx.rw = -1;
+		fuse_argv[1] = argv[2];
 
-	/* mirror the read-only directory tree under the writeable directory */
-	fd = dup(ctx.ro);
-	if (-1 == fd) {
-		ret = EXIT_FAILURE;
-		goto close_ro;
+		/* use stubs that fail with EROFS instead of real system calls that may
+		 * alter the read-only directory */
+		ctx.openat = openat_stub;
+		ctx.unlinkat = unlinkat_stub;
+		ctx.fchownat = fchownat_stub;
+		ctx.mkdirat = mkdirat_stub;
+		ctx.mknodat = mknodat_stub;
+		ctx.renameat = renameat_stub;
+		ctx.symlinkat = symlinkat_stub;
+		ctx.utimensat = utimensat_stub;
 	}
-	ret = mirror_dirs(fd, ctx.rw);
-	if (-1 == ret) {
-		(void) close(fd);
-		ret = EXIT_FAILURE;
-		goto close_ro;
+	else {
+		ctx.rw = open(argv[2], O_DIRECTORY);
+		if (-1 == ctx.rw) {
+			ret = EXIT_FAILURE;
+			goto close_ro;
+		}
+
+		/* mirror the read-only directory tree under the writeable directory */
+		fd = dup(ctx.ro);
+		if (-1 == fd) {
+			ret = EXIT_FAILURE;
+			goto close_ro;
+		}
+		ret = mirror_dirs(fd, ctx.rw);
+		if (-1 == ret) {
+			(void) close(fd);
+			ret = EXIT_FAILURE;
+			goto close_ro;
+		}
+
+		ctx.openat = openat;
+		ctx.unlinkat = unlinkat;
+		ctx.fchownat = fchownat;
+		ctx.mkdirat = mkdirat;
+		ctx.mknodat = mknodat;
+		ctx.renameat = renameat;
+		ctx.symlinkat = symlinkat;
+		ctx.utimensat = utimensat;
+
+		fuse_argv[1] = argv[3];
 	}
 
 	ctx.init = crc32(0L, Z_NULL, 0);
 	fuse_argv[0] = argv[0];
-	fuse_argv[1] = argv[3];
 	fuse_argv[2] = "-ononempty,suid,dev,allow_other,default_permissions";
 	fuse_argv[3] = NULL;
 	ret = fuse_main(3, fuse_argv, &luufs_oper, &ctx);
 
-	(void) close(ctx.rw);
+	if (-1 != ctx.rw)
+		(void) close(ctx.rw);
 
 close_ro:
 	(void) close(ctx.ro);
