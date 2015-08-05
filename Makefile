@@ -29,6 +29,7 @@ DESTDIR ?= /
 SBIN_DIR ?= sbin
 DOC_DIR ?= usr/share/doc/$(PROG)
 MAN_DIR ?= usr/share/man
+HAVE_WAIVE ?= 0
 
 CFLAGS += -std=gnu99 -D_GNU_SOURCE
 
@@ -37,15 +38,24 @@ ZLIB_CFLAGS = $(shell pkg-config --cflags zlib)
 FUSE_LIBS = $(shell pkg-config --libs fuse)
 ZLIB_LIBS = $(shell pkg-config --libs zlib)
 
+ifeq (0,$(HAVE_WAIVE))
+	LIBWAIVE_CFLAGS =
+	LIBWAIVE_LIBS =
+else
+	CFLAGS += -DHAVE_WAIVE
+	LIBWAIVE_CFLAGS = $(shell pkg-config --cflags libwaive)
+	LIBWAIVE_LIBS = $(shell pkg-config --libs libwaive)
+endif
+
 SRCS = $(wildcard *.c)
 OBJECTS = $(SRCS:.c=.o)
 HEADERS = $(wildcard *.h)
 
 %.o: %.c $(HEADERS)
-	$(CC) -c -o $@ $< $(CFLAGS) $(FUSE_CFLAGS) $(ZLIB_CFLAGS)
+	$(CC) -c -o $@ $< $(CFLAGS) $(FUSE_CFLAGS) $(ZLIB_CFLAGS) $(LIBWAIVE_CFLAGS)
 
 $(PROG): $(OBJECTS)
-	$(CC) -o $@ $^ $(LDFLAGS) $(FUSE_LIBS) $(ZLIB_LIBS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(FUSE_LIBS) $(ZLIB_LIBS) $(LIBWAIVE_LIBS)
 
 test: $(PROG)
 	sh test.sh

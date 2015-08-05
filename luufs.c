@@ -38,6 +38,10 @@
 #define FUSE_USE_VERSION (26)
 #include <fuse.h>
 
+#ifdef HAVE_WAIVE
+#	include <waive.h>
+#endif
+
 #define DIRENT_MAX 255
 
 struct luufs_ctx {
@@ -950,6 +954,13 @@ int main(int argc, char *argv[])
 		ret = EXIT_FAILURE;
 		goto out;
 	}
+
+#ifdef HAVE_WAIVE
+	if (-1 == waive(WAIVE_INET | WAIVE_PACKET | WAIVE_KILL)) {
+		ret = EXIT_FAILURE;
+		goto out;
+	}
+#endif
 
 	/* open both directories, so we can pass their file descriptors to the
 	 * *at() system calls later */
