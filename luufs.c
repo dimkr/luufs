@@ -54,6 +54,7 @@ struct luufs_ctx {
 	int (*renameat)(int, const char *, int, const char *);
 	int (*symlinkat)(const char *, int, const char *);
 	int (*utimensat)(int, const char *, const struct timespec[2], int);
+	int (*fstatat)(int, const char *, struct stat *, int);
 	int ro;
 	int rw;
 };
@@ -101,10 +102,10 @@ static int luufs_open(const char *name, struct fuse_file_info *fi)
 
 	/* return EROFS in errno if it's an attempt to overwrite a file under the
 	 * read-only directory */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -137,10 +138,10 @@ static int luufs_create(const char *name,
 	LUUFS_CALL_HEAD();
 
 	/* if the file already exists, return EEXIST in errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) {
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) {
 		ret = -EEXIST;
 		goto out;
 	}
@@ -199,10 +200,10 @@ static int luufs_truncate(const char *name, off_t size)
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) {
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW)) {
 		ret = -EROFS;
 		goto out;
 	}
@@ -236,18 +237,18 @@ static int luufs_stat(const char *name, struct stat *stbuf)
 	LUUFS_CALL_HEAD();
 
 	/* try the read-only directory first */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return 0;
 	if (ENOENT != errno)
 		return -errno;
 
-	if (0 == fstatat(ctx->rw,
-	                 &name[1],
-	                 stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->rw,
+	                      &name[1],
+	                      stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return 0;
 
 	return -errno;
@@ -330,10 +331,10 @@ static int luufs_unlink(const char *name)
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -352,10 +353,10 @@ static int luufs_mkdir(const char *name, mode_t mode)
 
 	/* if the directory exists under the read-only directory, return EEXIST in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EEXIST;
 	if (ENOENT != errno)
 		return -errno;
@@ -383,10 +384,10 @@ static int luufs_rmdir(const char *name)
 
 	/* if the directory exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -603,10 +604,10 @@ static int luufs_symlink(const char *to, const char *from)
 
 	/* if the link source exists under the read-only directory, return EEXIST in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &from[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &from[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EEXIST;
 	if (ENOENT != errno)
 		return -errno;
@@ -656,10 +657,10 @@ static int luufs_mknod(const char *name, mode_t mode, dev_t dev)
 
 	/* if the device exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -681,10 +682,10 @@ static int luufs_chmod(const char *name, mode_t mode)
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -703,10 +704,10 @@ static int luufs_chown(const char *name, uid_t uid, gid_t gid)
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -729,10 +730,10 @@ static int luufs_utimens(const char *name, const struct timespec tv[2])
 
 	/* if the file exists under the read-only directory, return EROFS in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &name[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &name[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
@@ -750,20 +751,20 @@ static int luufs_rename(const char *oldpath, const char *newpath)
 	LUUFS_CALL_HEAD();
 
 	/* if the file belongs to the read-only directory, return EROFS in errno */
-	if (0 == fstatat(ctx->ro,
-	                 &oldpath[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &oldpath[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EROFS;
 	if (ENOENT != errno)
 		return -errno;
 
 	/* if the destination exists under the read-only directory, return EEXIST in
 	 * errno */
-	if (0 == fstatat(ctx->ro,
-	                 &newpath[1],
-	                 &stbuf,
-	                 AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
+	if (0 == ctx->fstatat(ctx->ro,
+	                      &newpath[1],
+	                      &stbuf,
+	                      AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW))
 		return -EEXIST;
 	if (ENOENT != errno)
 		return -errno;
@@ -942,6 +943,17 @@ static int utimensat_stub(int dirfd,
 	return -EROFS;
 }
 
+static int fstatat_stub(int dirfd,
+                        const char *pathname,
+                        struct stat *buf,
+                        int flags)
+{
+	if (-1 == dirfd)
+		return -ENOENT;
+
+	return fstatat(dirfd, pathname, buf, flags);
+}
+
 int main(int argc, char *argv[])
 {
 	char *fuse_argv[4];
@@ -984,6 +996,7 @@ int main(int argc, char *argv[])
 		ctx.renameat = renameat_stub;
 		ctx.symlinkat = symlinkat_stub;
 		ctx.utimensat = utimensat_stub;
+		ctx.fstatat = fstatat_stub;
 	}
 	else {
 		ctx.rw = open(argv[2], O_DIRECTORY);
@@ -1013,6 +1026,7 @@ int main(int argc, char *argv[])
 		ctx.renameat = renameat;
 		ctx.symlinkat = symlinkat;
 		ctx.utimensat = utimensat;
+		ctx.fstatat = fstatat;
 
 		fuse_argv[1] = argv[3];
 	}
